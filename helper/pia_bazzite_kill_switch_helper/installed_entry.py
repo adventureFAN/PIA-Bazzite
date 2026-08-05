@@ -14,18 +14,21 @@ from .protocol import error_payload, infer_action
 
 INSTALL_ROOT = Path("/usr/local/libexec/pia-bazzite")
 INSTALLED_LAUNCHER = INSTALL_ROOT / "pia-bazzite-kill-switch-helper"
+INSTALLED_SESSION_LAUNCHER = INSTALL_ROOT / "pia-bazzite-kill-switch-session"
 INSTALLED_PACKAGE = INSTALL_ROOT / "pia_bazzite_kill_switch_helper"
 MANIFEST = INSTALL_ROOT / "kill-switch-helper-manifest.json"
 INSTALL_FORMAT = 1
 
 EXPECTED_FILES: Mapping[str, int] = {
     "pia-bazzite-kill-switch-helper": 0o755,
+    "pia-bazzite-kill-switch-session": 0o755,
     "pia_bazzite_kill_switch_helper/__init__.py": 0o644,
     "pia_bazzite_kill_switch_helper/cli.py": 0o644,
     "pia_bazzite_kill_switch_helper/core.py": 0o644,
     "pia_bazzite_kill_switch_helper/runner.py": 0o644,
     "pia_bazzite_kill_switch_helper/protocol.py": 0o644,
     "pia_bazzite_kill_switch_helper/installed_entry.py": 0o644,
+    "pia_bazzite_kill_switch_helper/session_entry.py": 0o644,
 }
 
 
@@ -215,6 +218,7 @@ __all__ = [
     "EXPECTED_FILES",
     "INSTALL_ROOT",
     "INSTALLED_LAUNCHER",
+    "INSTALLED_SESSION_LAUNCHER",
     "INSTALL_FORMAT",
     "InstallationBoundaryError",
     "MANIFEST",

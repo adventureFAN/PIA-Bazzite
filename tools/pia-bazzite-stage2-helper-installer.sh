@@ -4,17 +4,20 @@ umask 022
 
 TARGET_DIR="/usr/local/libexec/pia-bazzite"
 TARGET_LAUNCHER="$TARGET_DIR/pia-bazzite-kill-switch-helper"
+TARGET_SESSION_LAUNCHER="$TARGET_DIR/pia-bazzite-kill-switch-session"
 TARGET_PACKAGE="$TARGET_DIR/pia_bazzite_kill_switch_helper"
 TARGET_MANIFEST="$TARGET_DIR/kill-switch-helper-manifest.json"
 
 SOURCE_FILES=(
   "helper/pia-bazzite-kill-switch-helper-installed"
+  "helper/pia-bazzite-kill-switch-session-installed"
   "helper/pia_bazzite_kill_switch_helper/__init__.py"
   "helper/pia_bazzite_kill_switch_helper/cli.py"
   "helper/pia_bazzite_kill_switch_helper/core.py"
   "helper/pia_bazzite_kill_switch_helper/runner.py"
   "helper/pia_bazzite_kill_switch_helper/protocol.py"
   "helper/pia_bazzite_kill_switch_helper/installed_entry.py"
+  "helper/pia_bazzite_kill_switch_helper/session_entry.py"
 )
 
 fail() {
@@ -96,7 +99,7 @@ ensure_directories() {
 }
 
 install_helper() {
-  local root temporary source relative target source_hash target_hash
+  local root temporary source relative target source_hash target_hash session_hash
   root="$(project_root)"
 
   for relative in "${SOURCE_FILES[@]}"; do
@@ -110,12 +113,14 @@ import sys
 root = Path(sys.argv[1])
 for relative in (
     "helper/pia-bazzite-kill-switch-helper-installed",
+    "helper/pia-bazzite-kill-switch-session-installed",
     "helper/pia_bazzite_kill_switch_helper/__init__.py",
     "helper/pia_bazzite_kill_switch_helper/cli.py",
     "helper/pia_bazzite_kill_switch_helper/core.py",
     "helper/pia_bazzite_kill_switch_helper/runner.py",
     "helper/pia_bazzite_kill_switch_helper/protocol.py",
     "helper/pia_bazzite_kill_switch_helper/installed_entry.py",
+    "helper/pia_bazzite_kill_switch_helper/session_entry.py",
 ):
     source = root / relative
     compile(source.read_text(encoding="utf-8"), str(source), "exec")
@@ -123,8 +128,9 @@ PY
 
   ensure_directories
   check_existing_target_file "$TARGET_LAUNCHER"
+  check_existing_target_file "$TARGET_SESSION_LAUNCHER"
   check_existing_target_file "$TARGET_MANIFEST"
-  for relative in __init__.py cli.py core.py runner.py protocol.py installed_entry.py; do
+  for relative in __init__.py cli.py core.py runner.py protocol.py installed_entry.py session_entry.py; do
     check_existing_target_file "$TARGET_PACKAGE/$relative"
   done
 
@@ -134,7 +140,12 @@ PY
     -- "$root/helper/pia-bazzite-kill-switch-helper-installed" "$temporary"
   /usr/bin/mv -fT -- "$temporary" "$TARGET_LAUNCHER"
 
-  for relative in __init__.py cli.py core.py runner.py protocol.py installed_entry.py; do
+  temporary="$TARGET_DIR/.pia-bazzite-kill-switch-session.$$"
+  /usr/bin/install -o root -g root -m 0755 \
+    -- "$root/helper/pia-bazzite-kill-switch-session-installed" "$temporary"
+  /usr/bin/mv -fT -- "$temporary" "$TARGET_SESSION_LAUNCHER"
+
+  for relative in __init__.py cli.py core.py runner.py protocol.py installed_entry.py session_entry.py; do
     source="$root/helper/pia_bazzite_kill_switch_helper/$relative"
     target="$TARGET_PACKAGE/$relative"
     temporary="$TARGET_PACKAGE/.$relative.$$"
@@ -155,12 +166,14 @@ root = Path(sys.argv[1])
 manifest = Path(sys.argv[2])
 relative_files = (
     "pia-bazzite-kill-switch-helper",
+    "pia-bazzite-kill-switch-session",
     "pia_bazzite_kill_switch_helper/__init__.py",
     "pia_bazzite_kill_switch_helper/cli.py",
     "pia_bazzite_kill_switch_helper/core.py",
     "pia_bazzite_kill_switch_helper/runner.py",
     "pia_bazzite_kill_switch_helper/protocol.py",
     "pia_bazzite_kill_switch_helper/installed_entry.py",
+    "pia_bazzite_kill_switch_helper/session_entry.py",
 )
 
 def sha256(path: Path) -> str:
@@ -184,15 +197,17 @@ os.chmod(temporary, 0o644)
 os.replace(temporary, manifest)
 PY
 
-  /usr/bin/chown root:root -- "$TARGET_LAUNCHER" "$TARGET_MANIFEST" "$TARGET_PACKAGE"/*.py
-  /usr/bin/chmod 0755 -- "$TARGET_LAUNCHER"
+  /usr/bin/chown root:root -- "$TARGET_LAUNCHER" "$TARGET_SESSION_LAUNCHER" "$TARGET_MANIFEST" "$TARGET_PACKAGE"/*.py
+  /usr/bin/chmod 0755 -- "$TARGET_LAUNCHER" "$TARGET_SESSION_LAUNCHER"
   /usr/bin/chmod 0644 -- "$TARGET_MANIFEST" "$TARGET_PACKAGE"/*.py
 
   [ "$(stat -c '%u:%g:%a' -- "$TARGET_LAUNCHER")" = "0:0:755" ] \
     || fail "Installed launcher ownership or mode is incorrect."
+  [ "$(stat -c '%u:%g:%a' -- "$TARGET_SESSION_LAUNCHER")" = "0:0:755" ] \
+    || fail "Installed session launcher ownership or mode is incorrect."
   [ "$(stat -c '%u:%g:%a' -- "$TARGET_MANIFEST")" = "0:0:644" ] \
     || fail "Installed manifest ownership or mode is incorrect."
-  for relative in __init__.py cli.py core.py runner.py protocol.py installed_entry.py; do
+  for relative in __init__.py cli.py core.py runner.py protocol.py installed_entry.py session_entry.py; do
     [ "$(stat -c '%u:%g:%a' -- "$TARGET_PACKAGE/$relative")" = "0:0:644" ] \
       || fail "Installed module ownership or mode is incorrect: $relative"
   done
@@ -200,13 +215,18 @@ PY
   source_hash="$(sha256sum -- "$root/helper/pia-bazzite-kill-switch-helper-installed" | awk '{print $1}')"
   target_hash="$(sha256sum -- "$TARGET_LAUNCHER" | awk '{print $1}')"
   [ "$source_hash" = "$target_hash" ] || fail "Installed launcher checksum mismatch."
+  source_hash="$(sha256sum -- "$root/helper/pia-bazzite-kill-switch-session-installed" | awk '{print $1}')"
+  session_hash="$(sha256sum -- "$TARGET_SESSION_LAUNCHER" | awk '{print $1}')"
+  [ "$source_hash" = "$session_hash" ] || fail "Installed session launcher checksum mismatch."
 
   trap - EXIT
   printf 'Installed helper: %s\n' "$TARGET_LAUNCHER"
+  printf 'Installed session: %s\n' "$TARGET_SESSION_LAUNCHER"
   printf 'Installed package: %s\n' "$TARGET_PACKAGE"
   printf 'Installed manifest: %s\n' "$TARGET_MANIFEST"
   stat -c 'Launcher owner: %U:%G  Mode: %a  Size: %s bytes' -- "$TARGET_LAUNCHER"
   printf 'Launcher SHA-256: %s\n' "$target_hash"
+  printf 'Session SHA-256: %s\n' "$session_hash"
 }
 
 remove_regular_root_file() {
@@ -236,8 +256,9 @@ preflight_uninstall_file() {
 preflight_uninstall() {
   local relative
   preflight_uninstall_file "$TARGET_LAUNCHER"
+  preflight_uninstall_file "$TARGET_SESSION_LAUNCHER"
   preflight_uninstall_file "$TARGET_MANIFEST"
-  for relative in __init__.py cli.py core.py runner.py protocol.py installed_entry.py; do
+  for relative in __init__.py cli.py core.py runner.py protocol.py installed_entry.py session_entry.py; do
     preflight_uninstall_file "$TARGET_PACKAGE/$relative"
   done
 }
@@ -246,8 +267,9 @@ uninstall_helper() {
   local relative
   preflight_uninstall
   remove_regular_root_file "$TARGET_LAUNCHER"
+  remove_regular_root_file "$TARGET_SESSION_LAUNCHER"
   remove_regular_root_file "$TARGET_MANIFEST"
-  for relative in __init__.py cli.py core.py runner.py protocol.py installed_entry.py; do
+  for relative in __init__.py cli.py core.py runner.py protocol.py installed_entry.py session_entry.py; do
     remove_regular_root_file "$TARGET_PACKAGE/$relative"
   done
   /usr/bin/rmdir --ignore-fail-on-non-empty "$TARGET_PACKAGE" 2>/dev/null || true
@@ -259,13 +281,15 @@ show_status() {
   local missing=0 relative
   for relative in \
     "$TARGET_LAUNCHER" \
+    "$TARGET_SESSION_LAUNCHER" \
     "$TARGET_MANIFEST" \
     "$TARGET_PACKAGE/__init__.py" \
     "$TARGET_PACKAGE/cli.py" \
     "$TARGET_PACKAGE/core.py" \
     "$TARGET_PACKAGE/runner.py" \
     "$TARGET_PACKAGE/protocol.py" \
-    "$TARGET_PACKAGE/installed_entry.py"
+    "$TARGET_PACKAGE/installed_entry.py" \
+    "$TARGET_PACKAGE/session_entry.py"
   do
     if [ -e "$relative" ]; then
       [ ! -L "$relative" ] || fail "Installed target is a symbolic link: $relative"

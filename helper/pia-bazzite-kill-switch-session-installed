@@ -9,7 +9,7 @@ import stat
 import sys
 
 INSTALL_ROOT = Path('/usr/local/libexec/pia-bazzite')
-INSTALLED_LAUNCHER = INSTALL_ROOT / 'pia-bazzite-kill-switch-helper'
+INSTALLED_LAUNCHER = INSTALL_ROOT / 'pia-bazzite-kill-switch-session'
 INSTALLED_PACKAGE = INSTALL_ROOT / 'pia_bazzite_kill_switch_helper'
 MANIFEST = INSTALL_ROOT / 'kill-switch-helper-manifest.json'
 HELPER_STAGE = 2
@@ -18,10 +18,6 @@ SCHEMA_VERSION = 1
 INSTALL_FORMAT = 1
 EXIT_PRIVILEGE = 3
 EXIT_SAFETY = 6
-ACTIONS = {
-    'status', 'enable', 'set-interfaces', 'set-endpoints',
-    'add-endpoint', 'remove-endpoint', 'disable', 'emergency-reset',
-}
 EXPECTED_FILES = {
     'pia-bazzite-kill-switch-helper': 0o755,
     'pia-bazzite-kill-switch-session': 0o755,
@@ -43,22 +39,13 @@ class AuthorizationError(RuntimeError):
     pass
 
 
-def _infer_action(argv: list[str]) -> str:
-    for value in argv:
-        if value in ACTIONS:
-            return value
-        if not value.startswith('-'):
-            return 'unknown'
-    return 'unknown'
-
-
-def _emit_error(action: str, kind: str, message: str, code: int) -> int:
+def _emit_error(kind: str, message: str, code: int) -> int:
     payload = {
         'ok': False,
         'schema_version': SCHEMA_VERSION,
         'protocol_version': PROTOCOL_VERSION,
         'helper_stage': HELPER_STAGE,
-        'action': action,
+        'action': 'session-start',
         'error': kind,
         'message': message,
     }
@@ -68,7 +55,7 @@ def _emit_error(action: str, kind: str, message: str, code: int) -> int:
 
 def _verify_authorization() -> int:
     if os.geteuid() != 0:
-        raise AuthorizationError('Installed helper actions require root privileges via pkexec.')
+        raise AuthorizationError('Installed helper session requires root privileges via pkexec.')
     raw_uid = os.environ.get('PKEXEC_UID')
     if raw_uid is None or not raw_uid.isascii() or not raw_uid.isdecimal():
         raise AuthorizationError('PKEXEC_UID is missing or invalid; direct sudo/root execution is refused.')
@@ -107,9 +94,7 @@ def _safe_file(path: Path, mode: int) -> Path:
         raise BootstrapError(f'Installed file is not owned by root:root: {path}')
     actual_mode = stat.S_IMODE(metadata.st_mode)
     if actual_mode != mode:
-        raise BootstrapError(
-            f'Installed file has mode {actual_mode:04o}, expected {mode:04o}: {path}'
-        )
+        raise BootstrapError(f'Installed file has mode {actual_mode:04o}, expected {mode:04o}: {path}')
     if metadata.st_nlink != 1:
         raise BootstrapError(f'Installed file must have exactly one hard link: {path}')
     return resolved
@@ -128,9 +113,9 @@ def _verify_installation() -> None:
         actual_launcher = Path(sys.argv[0]).resolve(strict=True)
         expected_launcher = INSTALLED_LAUNCHER.resolve(strict=True)
     except OSError as exc:
-        raise BootstrapError(f'Could not resolve installed helper path: {exc}') from exc
+        raise BootstrapError(f'Could not resolve installed session path: {exc}') from exc
     if actual_launcher != expected_launcher:
-        raise BootstrapError(f'Helper must run from the fixed installed path {INSTALLED_LAUNCHER}.')
+        raise BootstrapError(f'Session must run from the fixed installed path {INSTALLED_LAUNCHER}.')
 
     resolved_parent = _safe_directory(INSTALL_ROOT.parent)
     resolved_root = _safe_directory(INSTALL_ROOT)
@@ -147,9 +132,7 @@ def _verify_installation() -> None:
         manifest = json.loads(MANIFEST.read_text(encoding='utf-8'))
     except (OSError, json.JSONDecodeError) as exc:
         raise BootstrapError(f'Could not read helper manifest safely: {exc}') from exc
-    required_keys = {
-        'schema_version', 'install_format', 'helper_stage', 'protocol_version', 'files'
-    }
+    required_keys = {'schema_version', 'install_format', 'helper_stage', 'protocol_version', 'files'}
     if not isinstance(manifest, dict) or set(manifest) != required_keys:
         raise BootstrapError('Helper manifest shape is incomplete or unexpected.')
     if manifest['schema_version'] != SCHEMA_VERSION:
@@ -181,10 +164,8 @@ def _verify_installation() -> None:
         if candidate != expected:
             raise BootstrapError(f'Installed file escaped the fixed helper directory: {relative_name}')
         manifest_hash = files.get(relative_name)
-        if (
-            not isinstance(manifest_hash, str)
-            or len(manifest_hash) != 64
-            or any(character not in '0123456789abcdef' for character in manifest_hash)
+        if not isinstance(manifest_hash, str) or len(manifest_hash) != 64 or any(
+            character not in '0123456789abcdef' for character in manifest_hash
         ):
             raise BootstrapError(f'Invalid manifest checksum for {relative_name}.')
         if _sha256(candidate) != manifest_hash:
@@ -201,22 +182,20 @@ def _sanitize_environment(uid: int) -> None:
 
 
 def main() -> int:
-    argv = list(sys.argv[1:])
-    action = _infer_action(argv)
     try:
         uid = _verify_authorization()
         _verify_installation()
         _sanitize_environment(uid)
         sys.dont_write_bytecode = True
         sys.path.insert(0, str(INSTALL_ROOT.resolve(strict=True)))
-        from pia_bazzite_kill_switch_helper.installed_entry import main as installed_main
-        return installed_main(argv, launcher_path=Path(sys.argv[0]))
+        from pia_bazzite_kill_switch_helper.session_entry import main as session_main
+        return session_main()
     except AuthorizationError as exc:
-        return _emit_error(action, 'privilege', str(exc), EXIT_PRIVILEGE)
+        return _emit_error('privilege', str(exc), EXIT_PRIVILEGE)
     except BootstrapError as exc:
-        return _emit_error(action, 'installation-boundary', str(exc), EXIT_SAFETY)
+        return _emit_error('installation-boundary', str(exc), EXIT_SAFETY)
     except Exception as exc:
-        return _emit_error(action, 'bootstrap-failure', f'Installed helper bootstrap failed: {exc}', EXIT_SAFETY)
+        return _emit_error('bootstrap-failure', f'Installed helper session bootstrap failed: {exc}', EXIT_SAFETY)
 
 
 raise SystemExit(main())

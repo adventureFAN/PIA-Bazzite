@@ -72,3 +72,22 @@ The interactive security test deliberately cancels one graphical Polkit prompt,
 then checks checksum tampering, unsafe modes, wrong manifest identity, symlink
 uninstall refusal, and preservation of unknown files. It never creates a
 firewall table and does not use NetworkManager.
+
+## Stage 3C single-authorization session
+
+The installed helper package now also contains a fixed session launcher:
+
+`/usr/local/libexec/pia-bazzite/pia-bazzite-kill-switch-session`
+
+One authorized `pkexec` launch opens a bounded JSON-lines broker. The
+unprivileged client can reuse that same broker for status, activation, atomic
+updates, and deliberate disable without starting another `pkexec` process for
+each operation. The broker has no shell interface, exits on EOF or idle timeout,
+and remains restricted to the existing validated helper actions.
+
+```bash
+./tools/kill-switch-session-stage3c-self-test.sh
+./tools/kill-switch-session-stage3c-namespace-test.sh
+```
+
+See `docs/kill-switch/KILL_SWITCH_SESSION_STAGE3C.md`.
