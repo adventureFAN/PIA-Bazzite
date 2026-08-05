@@ -48,6 +48,7 @@ class ProtocolEnvelopeTests(unittest.TestCase):
 
     def test_infer_action_uses_only_known_action_tokens(self) -> None:
         self.assertEqual(infer_action(["enable", "--interface", "wlo1"]).action, "enable")
+        self.assertEqual(infer_action(["set-endpoints", "--endpoint", "198.51.100.1:1337"]).action, "set-endpoints")
         self.assertEqual(infer_action(["totally-unknown"]).response_action, "unknown")
         self.assertEqual(infer_action([]).response_action, "unknown")
 

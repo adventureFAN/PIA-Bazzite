@@ -21,11 +21,13 @@ from .core import (
     render_disable_ruleset,
     render_enable_ruleset,
     render_remove_endpoint,
+    render_set_endpoints,
+    render_set_interfaces,
 )
 from .protocol import error_payload, infer_action, success_payload
 from .runner import NftError, NftRunner
 
-LOCK_PATH = Path("/run/lock/pia-bazzite-kill-switch-helper-stage1.lock")
+LOCK_PATH = Path("/run/lock/pia-bazzite-kill-switch-helper.lock")
 EXIT_VALIDATION = 2
 EXIT_PRIVILEGE = 3
 EXIT_NFT = 4
@@ -50,18 +52,34 @@ def _parser() -> argparse.ArgumentParser:
     parser = JsonArgumentParser(
         prog="pia-bazzite-kill-switch-helper",
         description=(
-            "Restricted stage-1 test helper. It can only manage the fixed "
-            f"nftables table {TABLE_NAME!r}."
+            "Restricted stage-2 candidate helper. It can manage only the fixed "
+            f"nftables table {TABLE_NAME!r} and still refuses the host network namespace."
         ),
     )
     parser.add_argument("--version", action="version", version=f"stage {HELPER_STAGE}")
     subparsers = parser.add_subparsers(dest="action", required=True)
 
-    subparsers.add_parser("status", help="Read and verify the fixed test table.")
+    subparsers.add_parser("status", help="Read and verify the fixed candidate table.")
 
-    enable = subparsers.add_parser("enable", help="Atomically replace the fixed test table.")
+    enable = subparsers.add_parser("enable", help="Atomically replace the fixed table.")
     enable.add_argument("--interface", action="append", required=True, dest="interfaces")
     enable.add_argument("--endpoint", action="append", required=True, dest="endpoints")
+
+    set_interfaces = subparsers.add_parser(
+        "set-interfaces",
+        help="Atomically replace the allowed physical-interface set.",
+    )
+    set_interfaces.add_argument(
+        "--interface", action="append", required=True, dest="interfaces"
+    )
+
+    set_endpoints = subparsers.add_parser(
+        "set-endpoints",
+        help="Atomically replace both exact WireGuard endpoint sets.",
+    )
+    set_endpoints.add_argument(
+        "--endpoint", action="append", required=True, dest="endpoints"
+    )
 
     add_endpoint = subparsers.add_parser("add-endpoint", help="Add one exact UDP endpoint.")
     add_endpoint.add_argument("--endpoint", required=True)
@@ -71,10 +89,10 @@ def _parser() -> argparse.ArgumentParser:
     )
     remove_endpoint.add_argument("--endpoint", required=True)
 
-    subparsers.add_parser("disable", help="Idempotently remove only the fixed test table.")
+    subparsers.add_parser("disable", help="Idempotently remove only the fixed candidate table.")
     subparsers.add_parser(
         "emergency-reset",
-        help="Idempotently remove only the fixed test table (explicit recovery action).",
+        help="Idempotently remove only the fixed candidate table (explicit recovery action).",
     )
     return parser
 
@@ -98,7 +116,9 @@ def _error(action: str | None, kind: str, message: str, code: int) -> int:
 
 def _require_root() -> None:
     if os.geteuid() != 0:
-        raise PermissionError("Stage-1 helper actions require root privileges inside the test namespace.")
+        raise PermissionError(
+            "Stage-2 candidate helper actions require root privileges inside the test namespace."
+        )
 
 
 def _require_isolated_network_namespace() -> None:
@@ -111,8 +131,8 @@ def _require_isolated_network_namespace() -> None:
         ) from exc
     if current_namespace == initial_namespace:
         raise SafetyBoundaryError(
-            "Stage-1 helper refuses the host network namespace. "
-            "Run it only through the isolated namespace test."
+            "Stage-2 candidate helper refuses the host network namespace. "
+            "Run it only through an isolated namespace test."
         )
 
 
@@ -126,7 +146,7 @@ def _exclusive_lock() -> Iterator[None]:
     try:
         metadata = os.fstat(descriptor)
         if not stat.S_ISREG(metadata.st_mode) or metadata.st_uid != 0 or metadata.st_nlink != 1:
-            raise OSError("Unsafe stage-1 helper lock file ownership or type.")
+            raise OSError("Unsafe helper lock file ownership or type.")
         os.fchmod(descriptor, 0o600)
         with os.fdopen(descriptor, "w", encoding="utf-8", closefd=True) as handle:
             descriptor = -1
@@ -135,7 +155,6 @@ def _exclusive_lock() -> Iterator[None]:
     finally:
         if descriptor >= 0:
             os.close(descriptor)
-        # The file is intentionally retained as a root-owned lock anchor.
 
 
 def _status(runner: NftRunner, *, action: str) -> tuple[dict[str, object], int]:
@@ -145,7 +164,7 @@ def _status(runner: NftRunner, *, action: str) -> tuple[dict[str, object], int]:
 
     result = runner.list_table_json()
     if result.returncode != 0:
-        detail = (result.stderr or result.stdout or "could not read test table").strip()
+        detail = (result.stderr or result.stdout or "could not read candidate table").strip()
         raise NftError(detail)
     status = parse_status_json(result.stdout)
     if status["verified"]:
@@ -165,20 +184,22 @@ def main(argv: Sequence[str] | None = None) -> int:
         args = _parser().parse_args(raw_argv)
         action = args.action
 
-        # Validate and render all user-controlled input before touching the
-        # privileged lock file or invoking nftables. Apart from producing a
-        # deterministic validation error, this keeps malformed requests free
-        # of privileged side effects.
+        # Render and validate every untrusted input before touching the root-owned
+        # lock or invoking nftables.
         script: str | None = None
         if args.action == "enable":
             script = render_enable_ruleset(args.interfaces, args.endpoints)
+        elif args.action == "set-interfaces":
+            script = render_set_interfaces(args.interfaces)
+        elif args.action == "set-endpoints":
+            script = render_set_endpoints(args.endpoints)
         elif args.action == "add-endpoint":
             script = render_add_endpoint(parse_endpoint(args.endpoint))
         elif args.action == "remove-endpoint":
             script = render_remove_endpoint(parse_endpoint(args.endpoint))
         elif args.action in {"disable", "emergency-reset"}:
             script = render_disable_ruleset()
-        elif args.action != "status":  # pragma: no cover - argparse prevents this branch.
+        elif args.action != "status":  # pragma: no cover
             raise ValidationError(f"Unsupported action: {args.action}")
 
         _require_root()
@@ -190,11 +211,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             _emit(payload, stream=sys.stdout if code == 0 else sys.stderr)
             return code
 
-        assert script is not None  # All mutating argparse actions render above.
+        assert script is not None
         with _exclusive_lock():
             runner.check_script(script)
             runner.apply_script(script)
-
             payload, code = _status(runner, action=args.action)
             _emit(payload, stream=sys.stdout if code == 0 else sys.stderr)
             return code

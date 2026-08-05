@@ -38,3 +38,19 @@ Design and test details are documented in:
 Stage 2D.1 adds a deterministic JSON protocol envelope for every normal helper
 result and every handled failure. The host-network safety refusal remains in
 place; see `docs/kill-switch/HELPER_PROTOCOL_V1.md`.
+
+## Stage 2D.2 candidate table structure
+
+The helper now renders the intended set-based firewall structure while still
+refusing the host network namespace and retaining the isolated test table name.
+The physical uplinks and exact WireGuard endpoints live in dedicated nftables
+sets so the helper can replace them atomically without rebuilding unrelated
+rules.
+
+```bash
+./tools/kill-switch-helper-stage2d2-self-test.sh
+./tools/kill-switch-helper-stage2d2-namespace-test.sh
+```
+
+The new fixed protocol actions are `set-interfaces` and `set-endpoints`. Host
+operation, GUI integration, and a production table name remain disabled.

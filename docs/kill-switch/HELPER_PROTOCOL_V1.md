@@ -3,7 +3,7 @@
 This document defines the stable machine-readable boundary between the future
 PIA Bazzite application client and the privileged helper.
 
-Stage 2D.1 does **not** enable host-network operation. The helper still refuses
+Stage 2D.2 still does **not** enable host-network operation. The helper still refuses
 the initial network namespace and still manages only the isolated stage-1 test
 table. This stage standardizes requests, responses, and error handling before
 production rules are introduced.
@@ -14,6 +14,8 @@ Protocol v1 currently exposes only these fixed actions:
 
 - `status`
 - `enable`
+- `set-interfaces`
+- `set-endpoints`
 - `add-endpoint`
 - `remove-endpoint`
 - `disable`
@@ -57,8 +59,7 @@ verification errors without parsing human-readable terminal text.
 
 ## Safety status
 
-This protocol milestone is network-free apart from existing isolated namespace
-tests. It does not:
+This protocol milestone is exercised by isolated namespace tests only. It does not:
 
 - remove the host-namespace refusal;
 - install a persistent helper;

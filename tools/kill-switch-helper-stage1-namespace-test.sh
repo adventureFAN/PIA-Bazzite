@@ -52,7 +52,7 @@ cleanup() {
   ip netns del "$VPN_NS" >/dev/null 2>&1 || true
   ip link del "$WAN_A" >/dev/null 2>&1 || true
   ip link del "$VPN_A" >/dev/null 2>&1 || true
-  rm -f /run/lock/pia-bazzite-kill-switch-helper-stage1.lock >/dev/null 2>&1 || true
+  rm -f /run/lock/pia-bazzite-kill-switch-helper.lock >/dev/null 2>&1 || true
   rm -rf "$TMP_DIR"
 }
 trap cleanup EXIT INT TERM

@@ -8,6 +8,7 @@ from helper.pia_bazzite_kill_switch_helper.core import (
     CHAIN_NAME,
     ENDPOINT_SET_V4,
     ENDPOINT_SET_V6,
+    PHYSICAL_INTERFACE_SET,
     TABLE_COMMENT,
     TABLE_NAME,
     ValidationError,
@@ -20,6 +21,8 @@ from helper.pia_bazzite_kill_switch_helper.core import (
     render_disable_ruleset,
     render_enable_ruleset,
     render_remove_endpoint,
+    render_set_endpoints,
+    render_set_interfaces,
     validate_interface,
 )
 
@@ -88,17 +91,21 @@ class EndpointValidationTests(unittest.TestCase):
 
 
 class RulesetRenderingTests(unittest.TestCase):
-    def test_enable_is_fixed_scope_and_contains_expected_protection(self) -> None:
+    def test_enable_uses_final_set_based_structure(self) -> None:
         ruleset = render_enable_ruleset(
             ["wlo1", "enp5s0"],
             ["198.51.100.1:1337", "[2001:db8::1]:51820"],
         )
         self.assertTrue(ruleset.startswith(f"destroy table inet {TABLE_NAME}\n"))
         self.assertIn(f"table inet {TABLE_NAME}", ruleset)
+        self.assertIn(f"set {PHYSICAL_INTERFACE_SET}", ruleset)
+        self.assertIn("type ifname", ruleset)
+        self.assertIn('elements = { "enp5s0", "wlo1" }', ruleset)
         self.assertIn(f"set {ENDPOINT_SET_V4}", ruleset)
         self.assertIn(f"set {ENDPOINT_SET_V6}", ruleset)
         self.assertIn("198.51.100.1 . 1337", ruleset)
         self.assertIn("2001:db8::1 . 51820", ruleset)
+        self.assertIn(f"oifname @{PHYSICAL_INTERFACE_SET}", ruleset)
         self.assertIn('oifname "piabazzite"', ruleset)
         self.assertIn("reject with icmpx type admin-prohibited", ruleset)
         self.assertNotIn("flush ruleset", ruleset)
@@ -108,6 +115,27 @@ class RulesetRenderingTests(unittest.TestCase):
         first = render_enable_ruleset(["wlo1", "enp5s0"], ["198.51.100.1:1337"])
         second = render_enable_ruleset(["enp5s0", "wlo1"], ["198.51.100.1:1337"])
         self.assertEqual(first, second)
+
+    def test_set_interfaces_is_one_atomic_nft_batch(self) -> None:
+        script = render_set_interfaces(["wlo1", "enp5s0", "wlo1"])
+        self.assertEqual(script, (
+            f"flush set inet {TABLE_NAME} {PHYSICAL_INTERFACE_SET}\n"
+            f"add element inet {TABLE_NAME} {PHYSICAL_INTERFACE_SET} "
+            '{ "enp5s0", "wlo1" }\n'
+        ))
+        self.assertNotIn("table inet", script)
+
+    def test_set_endpoints_replaces_both_families_atomically(self) -> None:
+        script = render_set_endpoints([
+            "198.51.100.2:1443",
+            "[2001:db8::2]:1443",
+        ])
+        self.assertTrue(script.startswith(
+            f"flush set inet {TABLE_NAME} {ENDPOINT_SET_V4}\n"
+            f"flush set inet {TABLE_NAME} {ENDPOINT_SET_V6}\n"
+        ))
+        self.assertIn("198.51.100.2 . 1443", script)
+        self.assertIn("2001:db8::2 . 1443", script)
 
     def test_endpoint_actions_never_accept_arbitrary_table_names(self) -> None:
         self.assertEqual(
@@ -123,28 +151,27 @@ class RulesetRenderingTests(unittest.TestCase):
 
 class StatusParsingTests(unittest.TestCase):
     def _payload(self, *, table_comment: str = TABLE_COMMENT, include_block: bool = True) -> str:
-        rules = [
-            {"rule": {"family": "inet", "table": TABLE_NAME, "chain": CHAIN_NAME,
-                      "comment": "pia-bazzite:test:loopback", "expr": []}},
-            {"rule": {"family": "inet", "table": TABLE_NAME, "chain": CHAIN_NAME,
-                      "comment": "pia-bazzite:test:dhcp4:wlo1", "expr": []}},
-            {"rule": {"family": "inet", "table": TABLE_NAME, "chain": CHAIN_NAME,
-                      "comment": "pia-bazzite:test:dhcp6:wlo1", "expr": []}},
-            {"rule": {"family": "inet", "table": TABLE_NAME, "chain": CHAIN_NAME,
-                      "comment": "pia-bazzite:test:ipv6-link:wlo1", "expr": []}},
-            {"rule": {"family": "inet", "table": TABLE_NAME, "chain": CHAIN_NAME,
-                      "comment": "pia-bazzite:test:endpoint4:wlo1", "expr": []}},
-            {"rule": {"family": "inet", "table": TABLE_NAME, "chain": CHAIN_NAME,
-                      "comment": "pia-bazzite:test:endpoint6:wlo1", "expr": []}},
-            {"rule": {"family": "inet", "table": TABLE_NAME, "chain": CHAIN_NAME,
-                      "comment": "pia-bazzite:test:vpn-tunnel", "expr": []}},
+        comments = [
+            "pia-bazzite:v1:loopback",
+            "pia-bazzite:v1:dhcp4",
+            "pia-bazzite:v1:dhcp6",
+            "pia-bazzite:v1:ipv6-link",
+            "pia-bazzite:v1:endpoint4",
+            "pia-bazzite:v1:endpoint6",
+            "pia-bazzite:v1:vpn-tunnel",
         ]
         if include_block:
-            rules.append({"rule": {"family": "inet", "table": TABLE_NAME, "chain": CHAIN_NAME,
-                                   "comment": "pia-bazzite:test:block-outside-vpn", "expr": []}})
+            comments.append("pia-bazzite:v1:block-outside-vpn")
+        rules = [
+            {"rule": {"family": "inet", "table": TABLE_NAME, "chain": CHAIN_NAME,
+                      "comment": comment, "expr": []}}
+            for comment in comments
+        ]
         return json.dumps({"nftables": [
             {"metainfo": {"json_schema_version": 1}},
             {"table": {"family": "inet", "name": TABLE_NAME, "comment": table_comment}},
+            {"set": {"family": "inet", "table": TABLE_NAME,
+                     "name": PHYSICAL_INTERFACE_SET, "type": "ifname"}},
             {"set": {"family": "inet", "table": TABLE_NAME, "name": ENDPOINT_SET_V4,
                      "type": ["ipv4_addr", "inet_service"]}},
             {"set": {"family": "inet", "table": TABLE_NAME, "name": ENDPOINT_SET_V6,
@@ -161,6 +188,8 @@ class StatusParsingTests(unittest.TestCase):
         self.assertTrue(status["verified"])
         self.assertEqual(status["state"], "active")
         self.assertEqual(status["problems"], [])
+        self.assertIn("set-endpoints", status["capabilities"])
+        self.assertEqual(status["table_generation"], 1)
 
     def test_missing_ownership_or_block_rule_is_error(self) -> None:
         status = parse_status_json(self._payload(table_comment="foreign", include_block=False))
@@ -169,6 +198,16 @@ class StatusParsingTests(unittest.TestCase):
         self.assertEqual(status["state"], "error")
         self.assertTrue(any("ownership" in problem for problem in status["problems"]))
         self.assertTrue(any("block-outside-vpn" in problem for problem in status["problems"]))
+
+    def test_missing_physical_interface_set_is_error(self) -> None:
+        payload = json.loads(self._payload())
+        payload["nftables"] = [
+            item for item in payload["nftables"]
+            if item.get("set", {}).get("name") != PHYSICAL_INTERFACE_SET
+        ]
+        status = parse_status_json(json.dumps(payload))
+        self.assertFalse(status["verified"])
+        self.assertTrue(any(PHYSICAL_INTERFACE_SET in problem for problem in status["problems"]))
 
     def test_disabled_status_is_verified_but_not_present(self) -> None:
         status = disabled_status()

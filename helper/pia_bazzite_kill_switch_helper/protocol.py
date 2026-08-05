@@ -9,6 +9,8 @@ SCHEMA_VERSION = 1
 ACTIONS = (
     "status",
     "enable",
+    "set-interfaces",
+    "set-endpoints",
     "add-endpoint",
     "remove-endpoint",
     "disable",

@@ -14,11 +14,27 @@ HELPER_PATH = Path("/usr/local/libexec/pia-bazzite/pia-bazzite-kill-switch-helpe
 IP_PATH = Path("/usr/bin/ip")
 NETNS_ROOT = Path("/run/netns")
 NAMESPACE_PATTERN = re.compile(r"pia-h2-client-[0-9]{1,10}\Z")
-FIXED_HELPER_ARGUMENTS = (
-    "enable", "--interface", "wan0",
-    "--endpoint", "198.51.100.1:1337",
-    "--endpoint", "[2001:db8:10::1]:1337",
-)
+
+# This bridge is test-only. Every operation maps to an entirely fixed helper
+# argv. The caller can select only the operation token and the temporary client
+# namespace; it cannot supply interfaces, endpoints, table names, or commands.
+FIXED_OPERATIONS: dict[str, tuple[str, ...]] = {
+    "enable": (
+        "enable", "--interface", "wan0",
+        "--endpoint", "198.51.100.10:1337",
+        "--endpoint", "[2001:db8:100::10]:1337",
+    ),
+    "status": ("status",),
+    "set-endpoints": (
+        "set-endpoints",
+        "--endpoint", "198.51.100.11:1443",
+        "--endpoint", "[2001:db8:100::11]:1443",
+    ),
+    "set-interfaces": ("set-interfaces", "--interface", "lan0"),
+    "add-endpoint": ("add-endpoint", "--endpoint", "198.51.100.10:1337"),
+    "remove-endpoint": ("remove-endpoint", "--endpoint", "198.51.100.10:1337"),
+    "disable": ("disable",),
+}
 EXIT_USAGE = 2
 EXIT_PRIVILEGE = 3
 EXIT_SAFETY = 4
@@ -41,13 +57,20 @@ def _emit_error(error: BridgeError) -> int:
     return error.code
 
 
-def parse_namespace(argv: Sequence[str]) -> str:
-    if len(argv) != 1:
-        raise BridgeError("usage", "Exactly one stage-2 client namespace name is required.", EXIT_USAGE)
+def parse_request(argv: Sequence[str]) -> tuple[str, str]:
+    if len(argv) not in (1, 2):
+        raise BridgeError(
+            "usage",
+            "Use: bridge CLIENT_NAMESPACE [FIXED_OPERATION].",
+            EXIT_USAGE,
+        )
     namespace = argv[0]
     if NAMESPACE_PATTERN.fullmatch(namespace) is None:
         raise BridgeError("validation", "Namespace name is outside the fixed stage-2 test scope.", EXIT_USAGE)
-    return namespace
+    operation = argv[1] if len(argv) == 2 else "enable"
+    if operation not in FIXED_OPERATIONS:
+        raise BridgeError("validation", "Operation is outside the fixed stage-2 test scope.", EXIT_USAGE)
+    return namespace, operation
 
 
 def _verify_root_owned_file(path: Path, expected_mode: int) -> None:
@@ -71,14 +94,14 @@ def verify_execution_boundary(
     environment: Mapping[str, str] | None = None,
 ) -> int:
     if os.geteuid() != 0:
-        raise BridgeError("privilege", "The test bridge must run through pkexec.", EXIT_PRIVILEGE)
+        raise BridgeError("privilege", "The test bridge must run through an authorized root boundary.", EXIT_PRIVILEGE)
     env = os.environ if environment is None else environment
     raw_uid = env.get("PKEXEC_UID")
     if raw_uid is None or not raw_uid.isascii() or not raw_uid.isdecimal():
         raise BridgeError("privilege", "PKEXEC_UID is missing or invalid.", EXIT_PRIVILEGE)
     invoking_uid = int(raw_uid, 10)
     if invoking_uid <= 0:
-        raise BridgeError("privilege", "The pkexec caller must be non-root.", EXIT_PRIVILEGE)
+        raise BridgeError("privilege", "The authorized caller must be non-root.", EXIT_PRIVILEGE)
 
     try:
         actual_bridge = launcher_path.resolve(strict=True)
@@ -115,19 +138,27 @@ def sanitized_environment(invoking_uid: int) -> dict[str, str]:
     }
 
 
-def build_exec_argv(namespace: str) -> list[str]:
+def build_exec_argv(namespace: str, operation: str = "enable") -> list[str]:
+    try:
+        helper_arguments = FIXED_OPERATIONS[operation]
+    except KeyError as exc:  # Callers normally pass parse_request output.
+        raise BridgeError("validation", "Unknown fixed operation.", EXIT_USAGE) from exc
     return [
         str(IP_PATH), "netns", "exec", namespace,
-        str(HELPER_PATH), *FIXED_HELPER_ARGUMENTS,
+        str(HELPER_PATH), *helper_arguments,
     ]
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     arguments = list(sys.argv[1:] if argv is None else argv)
     try:
-        namespace = parse_namespace(arguments)
+        namespace, operation = parse_request(arguments)
         invoking_uid = verify_execution_boundary(Path(sys.argv[0]), namespace)
-        os.execve(str(IP_PATH), build_exec_argv(namespace), sanitized_environment(invoking_uid))
+        os.execve(
+            str(IP_PATH),
+            build_exec_argv(namespace, operation),
+            sanitized_environment(invoking_uid),
+        )
     except BridgeError as exc:
         return _emit_error(exc)
     except OSError as exc:

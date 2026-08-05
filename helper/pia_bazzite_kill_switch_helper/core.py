@@ -6,24 +6,33 @@ import json
 import re
 from typing import Any, Iterable, Sequence
 
-HELPER_STAGE = 1
+HELPER_STAGE = 2
 SCHEMA_VERSION = 1
+# Stage 2D.2 keeps the host-namespace refusal and the historical test table
+# name, while exercising the intended production table *structure* inside
+# isolated namespaces.
 TABLE_NAME = "pia_bazzite_killswitch_helper_test"
 CHAIN_NAME = "output"
+PHYSICAL_INTERFACE_SET = "physical_interfaces"
 ENDPOINT_SET_V4 = "allowed_endpoints_v4"
 ENDPOINT_SET_V6 = "allowed_endpoints_v6"
 VPN_INTERFACE = "piabazzite"
-TABLE_COMMENT = "PIA Bazzite helper stage 1 test table"
-CHAIN_COMMENT = "PIA Bazzite helper stage 1 output chain"
+TABLE_COMMENT = "PIA Bazzite session kill switch candidate v1"
+CHAIN_COMMENT = "PIA Bazzite session kill switch output candidate v1"
 
 MAX_INTERFACES = 8
 MAX_ENDPOINTS = 32
 _INTERFACE_PATTERN = re.compile(r"^[A-Za-z0-9_.:-]{1,15}$")
 
 CORE_RULE_COMMENTS = {
-    "pia-bazzite:test:loopback",
-    "pia-bazzite:test:vpn-tunnel",
-    "pia-bazzite:test:block-outside-vpn",
+    "pia-bazzite:v1:loopback",
+    "pia-bazzite:v1:dhcp4",
+    "pia-bazzite:v1:dhcp6",
+    "pia-bazzite:v1:ipv6-link",
+    "pia-bazzite:v1:endpoint4",
+    "pia-bazzite:v1:endpoint6",
+    "pia-bazzite:v1:vpn-tunnel",
+    "pia-bazzite:v1:block-outside-vpn",
 }
 
 
@@ -134,20 +143,24 @@ def normalize_endpoints(values: Iterable[str | Endpoint]) -> tuple[Endpoint, ...
 
 
 def _quote_nft_string(value: str) -> str:
-    # All callers validate against a strict interface-name allowlist. Keeping the
-    # quoting function explicit makes the trust boundary visible.
     if not _INTERFACE_PATTERN.fullmatch(value):
         raise ValidationError("Unsafe nftables string.")
     return f'"{value}"'
 
 
-def _set_block(name: str, nft_type: str, elements: Sequence[Endpoint]) -> list[str]:
+def _set_block(name: str, nft_type: str, elements: Sequence[str]) -> list[str]:
     lines = [f"  set {name} {{", f"    type {nft_type}", "    size 32"]
     if elements:
-        joined = ", ".join(endpoint.nft_element for endpoint in elements)
-        lines.append(f"    elements = {{ {joined} }}")
+        lines.append(f"    elements = {{ {', '.join(elements)} }}")
     lines.append("  }")
     return lines
+
+
+def _split_endpoints(endpoints: Sequence[Endpoint]) -> tuple[list[Endpoint], list[Endpoint]]:
+    return (
+        [endpoint for endpoint in endpoints if endpoint.family == 4],
+        [endpoint for endpoint in endpoints if endpoint.family == 6],
+    )
 
 
 def render_enable_ruleset(
@@ -156,49 +169,60 @@ def render_enable_ruleset(
 ) -> str:
     physical_interfaces = normalize_interfaces(interfaces)
     normalized_endpoints = normalize_endpoints(endpoints)
-    endpoints_v4 = [endpoint for endpoint in normalized_endpoints if endpoint.family == 4]
-    endpoints_v6 = [endpoint for endpoint in normalized_endpoints if endpoint.family == 6]
+    endpoints_v4, endpoints_v6 = _split_endpoints(normalized_endpoints)
 
     lines = [
         f"destroy table inet {TABLE_NAME}",
         f"table inet {TABLE_NAME} {{",
         f'  comment "{TABLE_COMMENT}"',
     ]
-    lines.extend(_set_block(ENDPOINT_SET_V4, "ipv4_addr . inet_service", endpoints_v4))
-    lines.extend(_set_block(ENDPOINT_SET_V6, "ipv6_addr . inet_service", endpoints_v6))
+    lines.extend(
+        _set_block(
+            PHYSICAL_INTERFACE_SET,
+            "ifname",
+            [_quote_nft_string(interface) for interface in physical_interfaces],
+        )
+    )
+    lines.extend(
+        _set_block(
+            ENDPOINT_SET_V4,
+            "ipv4_addr . inet_service",
+            [endpoint.nft_element for endpoint in endpoints_v4],
+        )
+    )
+    lines.extend(
+        _set_block(
+            ENDPOINT_SET_V6,
+            "ipv6_addr . inet_service",
+            [endpoint.nft_element for endpoint in endpoints_v6],
+        )
+    )
     lines.extend(
         [
             f"  chain {CHAIN_NAME} {{",
             "    type filter hook output priority -100; policy accept;",
             f'    comment "{CHAIN_COMMENT}"',
-            '    oifname "lo" counter accept comment "pia-bazzite:test:loopback"',
-        ]
-    )
-
-    for interface in physical_interfaces:
-        quoted = _quote_nft_string(interface)
-        lines.extend(
-            [
-                f"    ip protocol udp udp sport 68 udp dport 67 oifname {quoted} "
-                f'counter accept comment "pia-bazzite:test:dhcp4:{interface}"',
-                f"    ip6 nexthdr udp udp sport 546 udp dport 547 oifname {quoted} "
-                f'counter accept comment "pia-bazzite:test:dhcp6:{interface}"',
-                "    ip6 nexthdr icmpv6 icmpv6 type { nd-router-solicit, "
-                "nd-neighbor-solicit, nd-neighbor-advert } "
-                f"oifname {quoted} counter accept "
-                f'comment "pia-bazzite:test:ipv6-link:{interface}"',
-                f"    ip daddr . udp dport @{ENDPOINT_SET_V4} oifname {quoted} "
-                f'counter accept comment "pia-bazzite:test:endpoint4:{interface}"',
-                f"    ip6 daddr . udp dport @{ENDPOINT_SET_V6} oifname {quoted} "
-                f'counter accept comment "pia-bazzite:test:endpoint6:{interface}"',
-            ]
-        )
-
-    lines.extend(
-        [
-            f'    oifname "{VPN_INTERFACE}" counter accept comment "pia-bazzite:test:vpn-tunnel"',
+            '    oifname "lo" counter accept comment "pia-bazzite:v1:loopback"',
+            f"    ip protocol udp udp sport 68 udp dport 67 "
+            f"oifname @{PHYSICAL_INTERFACE_SET} counter accept "
+            f'comment "pia-bazzite:v1:dhcp4"',
+            f"    ip6 nexthdr udp udp sport 546 udp dport 547 "
+            f"oifname @{PHYSICAL_INTERFACE_SET} counter accept "
+            f'comment "pia-bazzite:v1:dhcp6"',
+            "    ip6 nexthdr icmpv6 icmpv6 type { nd-router-solicit, "
+            "nd-neighbor-solicit, nd-neighbor-advert } "
+            f"oifname @{PHYSICAL_INTERFACE_SET} counter accept "
+            f'comment "pia-bazzite:v1:ipv6-link"',
+            f"    ip daddr . udp dport @{ENDPOINT_SET_V4} "
+            f"oifname @{PHYSICAL_INTERFACE_SET} counter accept "
+            f'comment "pia-bazzite:v1:endpoint4"',
+            f"    ip6 daddr . udp dport @{ENDPOINT_SET_V6} "
+            f"oifname @{PHYSICAL_INTERFACE_SET} counter accept "
+            f'comment "pia-bazzite:v1:endpoint6"',
+            f'    oifname "{VPN_INTERFACE}" counter accept '
+            f'comment "pia-bazzite:v1:vpn-tunnel"',
             "    counter reject with icmpx type admin-prohibited "
-            'comment "pia-bazzite:test:block-outside-vpn"',
+            'comment "pia-bazzite:v1:block-outside-vpn"',
             "  }",
             "}",
             "",
@@ -207,22 +231,45 @@ def render_enable_ruleset(
     return "\n".join(lines)
 
 
+def render_set_interfaces(interfaces: Iterable[str]) -> str:
+    normalized = normalize_interfaces(interfaces)
+    elements = ", ".join(_quote_nft_string(value) for value in normalized)
+    return (
+        f"flush set inet {TABLE_NAME} {PHYSICAL_INTERFACE_SET}\n"
+        f"add element inet {TABLE_NAME} {PHYSICAL_INTERFACE_SET} {{ {elements} }}\n"
+    )
+
+
+def render_set_endpoints(endpoints: Iterable[str | Endpoint]) -> str:
+    normalized = normalize_endpoints(endpoints)
+    endpoints_v4, endpoints_v6 = _split_endpoints(normalized)
+    lines = [
+        f"flush set inet {TABLE_NAME} {ENDPOINT_SET_V4}",
+        f"flush set inet {TABLE_NAME} {ENDPOINT_SET_V6}",
+    ]
+    if endpoints_v4:
+        lines.append(
+            f"add element inet {TABLE_NAME} {ENDPOINT_SET_V4} "
+            f"{{ {', '.join(item.nft_element for item in endpoints_v4)} }}"
+        )
+    if endpoints_v6:
+        lines.append(
+            f"add element inet {TABLE_NAME} {ENDPOINT_SET_V6} "
+            f"{{ {', '.join(item.nft_element for item in endpoints_v6)} }}"
+        )
+    return "\n".join(lines) + "\n"
+
+
 def render_add_endpoint(endpoint: str | Endpoint) -> str:
     parsed = endpoint if isinstance(endpoint, Endpoint) else parse_endpoint(endpoint)
     set_name = ENDPOINT_SET_V4 if parsed.family == 4 else ENDPOINT_SET_V6
-    return (
-        f"add element inet {TABLE_NAME} {set_name} "
-        f"{{ {parsed.nft_element} }}\n"
-    )
+    return f"add element inet {TABLE_NAME} {set_name} {{ {parsed.nft_element} }}\n"
 
 
 def render_remove_endpoint(endpoint: str | Endpoint) -> str:
     parsed = endpoint if isinstance(endpoint, Endpoint) else parse_endpoint(endpoint)
     set_name = ENDPOINT_SET_V4 if parsed.family == 4 else ENDPOINT_SET_V6
-    return (
-        f"destroy element inet {TABLE_NAME} {set_name} "
-        f"{{ {parsed.nft_element} }}\n"
-    )
+    return f"destroy element inet {TABLE_NAME} {set_name} {{ {parsed.nft_element} }}\n"
 
 
 def render_disable_ruleset() -> str:
@@ -249,48 +296,63 @@ def parse_status_json(payload: str) -> dict[str, Any]:
         if not isinstance(item, dict):
             continue
         table_obj = item.get("table")
-        if isinstance(table_obj, dict) and table_obj.get("family") == "inet" \
-                and table_obj.get("name") == TABLE_NAME:
+        if (
+            isinstance(table_obj, dict)
+            and table_obj.get("family") == "inet"
+            and table_obj.get("name") == TABLE_NAME
+        ):
             table_found = True
             table_comment = str(table_obj.get("comment", ""))
 
         set_obj = item.get("set")
-        if isinstance(set_obj, dict) and set_obj.get("family") == "inet" \
-                and set_obj.get("table") == TABLE_NAME:
+        if (
+            isinstance(set_obj, dict)
+            and set_obj.get("family") == "inet"
+            and set_obj.get("table") == TABLE_NAME
+        ):
             name = set_obj.get("name")
             if isinstance(name, str):
                 sets[name] = set_obj.get("type")
 
         chain_obj = item.get("chain")
-        if isinstance(chain_obj, dict) and chain_obj.get("family") == "inet" \
-                and chain_obj.get("table") == TABLE_NAME \
-                and chain_obj.get("name") == CHAIN_NAME:
+        if (
+            isinstance(chain_obj, dict)
+            and chain_obj.get("family") == "inet"
+            and chain_obj.get("table") == TABLE_NAME
+            and chain_obj.get("name") == CHAIN_NAME
+        ):
             chain = chain_obj
 
         rule_obj = item.get("rule")
-        if isinstance(rule_obj, dict) and rule_obj.get("family") == "inet" \
-                and rule_obj.get("table") == TABLE_NAME \
-                and rule_obj.get("chain") == CHAIN_NAME:
+        if (
+            isinstance(rule_obj, dict)
+            and rule_obj.get("family") == "inet"
+            and rule_obj.get("table") == TABLE_NAME
+            and rule_obj.get("chain") == CHAIN_NAME
+        ):
             comment = rule_obj.get("comment")
             if isinstance(comment, str):
                 rule_comments.add(comment)
 
     problems: list[str] = []
     if not table_found:
-        problems.append("test table is missing")
+        problems.append("candidate table is missing")
     if table_found and table_comment != TABLE_COMMENT:
         problems.append("table ownership marker is missing or incorrect")
 
-    expected_set_types = {
+    expected_set_types: dict[str, str | list[str]] = {
+        PHYSICAL_INTERFACE_SET: "ifname",
         ENDPOINT_SET_V4: ["ipv4_addr", "inet_service"],
         ENDPOINT_SET_V6: ["ipv6_addr", "inet_service"],
     }
     for name, expected_type in expected_set_types.items():
         actual_type = sets.get(name)
-        # Older nft JSON sometimes serializes a concatenated type as a string.
-        valid_types = {tuple(expected_type), tuple([" . ".join(expected_type)])}
-        normalized_type = tuple(actual_type) if isinstance(actual_type, list) else (actual_type,)
-        if normalized_type not in valid_types:
+        if isinstance(expected_type, list):
+            valid_types = {tuple(expected_type), (" . ".join(expected_type),)}
+            normalized_type = tuple(actual_type) if isinstance(actual_type, list) else (actual_type,)
+            if normalized_type not in valid_types:
+                problems.append(f"set {name} is missing or has the wrong type")
+        elif actual_type not in (expected_type, [expected_type]):
             problems.append(f"set {name} is missing or has the wrong type")
 
     if chain is None:
@@ -311,35 +373,21 @@ def parse_status_json(payload: str) -> dict[str, Any]:
     for comment in sorted(CORE_RULE_COMMENTS - rule_comments):
         problems.append(f"required rule marker is missing: {comment}")
 
-    interface_categories = ("dhcp4", "dhcp6", "ipv6-link", "endpoint4", "endpoint6")
-    interfaces_by_category: dict[str, set[str]] = {}
-    for category in interface_categories:
-        prefix = f"pia-bazzite:test:{category}:"
-        interfaces: set[str] = set()
-        for comment in rule_comments:
-            if comment.startswith(prefix):
-                candidate = comment[len(prefix):]
-                try:
-                    interfaces.add(validate_interface(candidate))
-                except ValidationError:
-                    problems.append(f"invalid interface marker in rule comment: {comment}")
-        interfaces_by_category[category] = interfaces
-        if not interfaces:
-            problems.append(f"no {category} interface rule was found")
-
-    reference_interfaces = interfaces_by_category["dhcp4"]
-    for category in interface_categories[1:]:
-        if interfaces_by_category[category] != reference_interfaces:
-            problems.append(f"interface rule markers are inconsistent for {category}")
-
     return {
         "schema_version": SCHEMA_VERSION,
         "helper_stage": HELPER_STAGE,
         "table": TABLE_NAME,
+        "table_generation": 1,
         "present": table_found,
         "verified": table_found and not problems,
         "state": "active" if table_found and not problems else "error",
         "problems": problems,
+        "capabilities": [
+            "set-interfaces",
+            "set-endpoints",
+            "add-endpoint",
+            "remove-endpoint",
+        ],
     }
 
 
@@ -348,8 +396,15 @@ def disabled_status() -> dict[str, Any]:
         "schema_version": SCHEMA_VERSION,
         "helper_stage": HELPER_STAGE,
         "table": TABLE_NAME,
+        "table_generation": 1,
         "present": False,
         "verified": True,
         "state": "disabled",
         "problems": [],
+        "capabilities": [
+            "set-interfaces",
+            "set-endpoints",
+            "add-endpoint",
+            "remove-endpoint",
+        ],
     }
