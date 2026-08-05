@@ -1,8 +1,15 @@
 from __future__ import annotations
 
 from PySide6.QtCore import QSize, Qt
-from PySide6.QtGui import QPalette
-from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QVBoxLayout, QWidget
+from PySide6.QtGui import QColor, QFont, QPalette
+from PySide6.QtWidgets import (
+    QFrame,
+    QHBoxLayout,
+    QLabel,
+    QSizePolicy,
+    QVBoxLayout,
+    QWidget,
+)
 
 from .i18n import tr
 from .icons import status_icon
@@ -40,14 +47,27 @@ class KillSwitchStatusWidget(QFrame):
 
         self.title_label = QLabel()
         self.title_label.setObjectName("killSwitchStatusTitle")
+        title_font = QFont(self.title_label.font())
+        title_font.setPixelSize(20)
+        title_font.setWeight(QFont.Weight.DemiBold)
+        self.title_label.setFont(title_font)
+        self.title_label.setSizePolicy(
+            QSizePolicy.Policy.Preferred,
+            QSizePolicy.Policy.Maximum,
+        )
 
         self.summary_label = QLabel()
         self.summary_label.setObjectName("killSwitchStatusSummary")
         self.summary_label.setWordWrap(True)
+        self.summary_label.setSizePolicy(
+            QSizePolicy.Policy.Preferred,
+            QSizePolicy.Policy.Maximum,
+        )
 
         text_layout = QVBoxLayout()
-        text_layout.setContentsMargins(0, 0, 0, 0)
-        text_layout.setSpacing(3)
+        text_layout.setContentsMargins(0, 10, 0, 0)
+        text_layout.setSpacing(1)
+        text_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
         text_layout.addWidget(self.title_label)
         text_layout.addWidget(self.summary_label)
 
@@ -82,9 +102,12 @@ class KillSwitchStatusWidget(QFrame):
             ).pixmap(52, 52)
         )
         self.title_label.setText(tr(self._state.title_key))
-        self.title_label.setStyleSheet(
-            f"font-size: 20px; font-weight: 650; color: {color};"
+        title_palette = QPalette(self.title_label.palette())
+        title_palette.setColor(
+            QPalette.ColorRole.WindowText,
+            QColor(color),
         )
+        self.title_label.setPalette(title_palette)
         self.summary_label.setText(tr(self._state.summary_key))
 
         tooltip = tr(self._state.detail_key)

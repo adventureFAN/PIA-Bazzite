@@ -10,8 +10,8 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from PySide6.QtCore import QCoreApplication, QSettings, QTimer
-from PySide6.QtWidgets import QApplication
+from PySide6.QtCore import QCoreApplication, QSettings, QSize, QTimer, Qt
+from PySide6.QtWidgets import QApplication, QPlainTextEdit
 
 from pia_bazzite.gui import MainWindow
 from pia_bazzite.i18n import set_language
@@ -78,6 +78,20 @@ def main() -> int:
                 )
                 if window.kill_switch_status_widget.state is not state:
                     raise RuntimeError("Preview widget did not accept the selected state.")
+            if (
+                window.log_view.lineWrapMode()
+                != QPlainTextEdit.LineWrapMode.WidgetWidth
+            ):
+                raise RuntimeError("Live Log line wrapping is not enabled.")
+            if (
+                window.log_view.horizontalScrollBarPolicy()
+                != Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+            ):
+                raise RuntimeError("Live Log horizontal scrollbar is still enabled.")
+            if window.ip_refresh_button.size() != QSize(28, 24):
+                raise RuntimeError("Public-IP refresh control is not compact.")
+            if window.size() != QSize(800, 780):
+                raise RuntimeError("Expanded preview window has an unexpected size.")
             QTimer.singleShot(0, app.quit)
         else:
             window.show()

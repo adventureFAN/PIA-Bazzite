@@ -7,7 +7,15 @@ from pathlib import Path
 from typing import Any
 
 from PySide6.QtCore import QSettings, QSize, QThreadPool, QTimer, Qt
-from PySide6.QtGui import QAction, QActionGroup, QCloseEvent, QFont, QFontDatabase, QKeySequence
+from PySide6.QtGui import (
+    QAction,
+    QActionGroup,
+    QCloseEvent,
+    QFont,
+    QFontDatabase,
+    QKeySequence,
+    QTextOption,
+)
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -27,6 +35,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPlainTextEdit,
     QPushButton,
+    QToolButton,
     QSizePolicy,
     QSystemTrayIcon,
     QVBoxLayout,
@@ -65,8 +74,8 @@ from .workers import FunctionWorker
 
 
 FASTEST_ID = "__fastest__"
-COMPACT_SIZE = QSize(790, 510)
-LOG_SIZE = QSize(840, 780)
+COMPACT_SIZE = QSize(760, 510)
+LOG_SIZE = QSize(800, 780)
 
 
 class CredentialsDialog(QDialog):
@@ -498,8 +507,9 @@ class MainWindow(QMainWindow):
         self.ip_caption = QLabel()
         self._set_demi_bold(self.ip_caption)
         self.ip_value = QLabel()
-        self.ip_refresh_button = QPushButton("↻")
-        self.ip_refresh_button.setFixedSize(34, 28)
+        self.ip_refresh_button = QToolButton()
+        self.ip_refresh_button.setText("↻")
+        self.ip_refresh_button.setFixedSize(28, 24)
         self.ip_refresh_button.clicked.connect(
             lambda: self.refresh_public_info(show_errors=True)
         )
@@ -609,7 +619,13 @@ class MainWindow(QMainWindow):
 
         self.log_view = QPlainTextEdit()
         self.log_view.setReadOnly(True)
-        self.log_view.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
+        self.log_view.setLineWrapMode(QPlainTextEdit.LineWrapMode.WidgetWidth)
+        self.log_view.setWordWrapMode(
+            QTextOption.WrapMode.WrapAtWordBoundaryOrAnywhere
+        )
+        self.log_view.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
         self.log_view.document().setMaximumBlockCount(1500)
         self.log_view.setFont(
             QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont)
@@ -626,6 +642,7 @@ class MainWindow(QMainWindow):
         self.log_clear_button.clicked.connect(self.log_view.clear)
 
         buttons = QHBoxLayout()
+        buttons.setContentsMargins(0, 2, 0, 0)
         buttons.addStretch()
         buttons.addWidget(self.log_copy_button)
         buttons.addWidget(self.log_save_button)
