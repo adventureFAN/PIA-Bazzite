@@ -119,6 +119,7 @@ class KillSwitchStateTests(unittest.TestCase):
     def test_each_state_has_stable_translation_and_log_metadata(self) -> None:
         for state in sample_kill_switch_states():
             self.assertTrue(state.title_key.startswith("kill_switch.state."))
+            self.assertTrue(state.summary_key.startswith("kill_switch.summary."))
             self.assertTrue(state.detail_key.startswith("kill_switch.detail."))
             self.assertTrue(state.tray_status_key.startswith("tray.kill_switch_status."))
             self.assertTrue(state.tray_tooltip_key.startswith("tray.kill_switch_tooltip."))

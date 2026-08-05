@@ -39,6 +39,11 @@ from .credentials import CredentialStore, Credentials
 from .i18n import language, set_language, tr
 from .icons import status_dot_icon, status_icon, system_status_icon
 from .logging_utils import mask_ip_address, redact_secrets
+from .kill_switch_state import (
+    KillSwitchViewState,
+    sample_kill_switch_states,
+)
+from .kill_switch_widgets import KillSwitchStatusWidget
 from .models import PublicNetworkInfo, Region, SystemCheck
 from .pia_api import (
     create_wireguard_config,
@@ -229,6 +234,8 @@ class MainWindow(QMainWindow):
         app: QApplication,
         settings: QSettings,
         theme_controller: ThemeController,
+        *,
+        stage4_preview: bool = False,
     ) -> None:
         super().__init__()
         self.app = app
@@ -237,6 +244,12 @@ class MainWindow(QMainWindow):
         self.credential_store = CredentialStore(settings)
         self.thread_pool = QThreadPool.globalInstance()
         self._workers: set[FunctionWorker] = set()
+        self._stage4_preview = bool(stage4_preview)
+        self._stage4_preview_states = sample_kill_switch_states()
+        self._stage4_preview_index = 0
+        self._kill_switch_view_state: KillSwitchViewState = (
+            self._stage4_preview_states[0]
+        )
 
         self.session_credentials: Credentials | None = None
         self.regions: list[Region] = load_regions()
@@ -270,10 +283,26 @@ class MainWindow(QMainWindow):
         self._create_main_ui()
         self._create_live_log()
         self._create_tray()
+        if self._stage4_preview:
+            self._create_stage4_preview_menu()
 
         self.retranslate()
-        self._apply_tray_setting(log_change=False)
         self._apply_live_log_setting(initial=True)
+
+        if self._stage4_preview:
+            self.status_timer = QTimer(self)
+            self.tray.hide()
+            self.tray_action.setEnabled(False)
+            self._prepare_stage4_preview()
+            self.log("info", "log.started", version=__version__)
+            self._set_stage4_preview_state(0, log_transition=False)
+            self.log(
+                self._kill_switch_view_state.log_level,
+                self._kill_switch_view_state.log_key,
+            )
+            return
+
+        self._apply_tray_setting(log_change=False)
         self.run_system_check(show_dialog=False, log_result=True)
         self._populate_region_combo()
         self.update_connection_status(force=True)
@@ -450,6 +479,10 @@ class MainWindow(QMainWindow):
         self.status_group = QGroupBox()
         status_layout = QVBoxLayout(self.status_group)
 
+        self.kill_switch_status_widget = KillSwitchStatusWidget()
+        self.kill_switch_status_widget.hide()
+        status_layout.addWidget(self.kill_switch_status_widget)
+
         self.status_label = QLabel()
         self.status_label.setStyleSheet("font-size: 20px; font-weight: 650;")
         self.status_detail_label = QLabel()
@@ -614,6 +647,121 @@ class MainWindow(QMainWindow):
         self.tray.activated.connect(self._tray_activated)
         self._rebuild_tray_menu()
 
+    def _create_stage4_preview_menu(self) -> None:
+        self.preview_menu = self.menuBar().addMenu("")
+        self.preview_group = QActionGroup(self)
+        self.preview_group.setExclusive(True)
+        self.preview_actions: list[QAction] = []
+
+        for index, state in enumerate(self._stage4_preview_states):
+            action = QAction(self)
+            action.setCheckable(True)
+            action.setShortcut(QKeySequence(f"Ctrl+{index + 1}"))
+            action.triggered.connect(
+                lambda checked=False, selected=index: (
+                    self._set_stage4_preview_state(
+                        selected,
+                        log_transition=True,
+                    )
+                )
+            )
+            self.preview_group.addAction(action)
+            self.preview_menu.addAction(action)
+            self.preview_actions.append(action)
+
+    def _prepare_stage4_preview(self) -> None:
+        self.status_label.hide()
+        self.status_detail_label.hide()
+        self.kill_switch_caption.hide()
+        self.kill_switch_value.hide()
+        self.kill_switch_status_widget.show()
+
+        self.regions = []
+        self.region_combo.blockSignals(True)
+        self.region_combo.clear()
+        self.region_combo.addItem("Netherlands — Amsterdam", "preview")
+        self.region_combo.setCurrentIndex(0)
+        self.region_combo.blockSignals(False)
+        self.search_edit.setText("")
+        self.search_edit.setEnabled(False)
+        self.region_combo.setEnabled(False)
+        self.reload_button.setEnabled(False)
+        self.ping_button.setEnabled(False)
+        self.ip_refresh_button.setEnabled(False)
+        self.system_button.setText(tr("preview.stage4b.notice"))
+        self.system_button.setIcon(system_status_icon("ok"))
+        self.system_button.setEnabled(False)
+
+        for action in (
+            self.toggle_vpn_action,
+            self.reload_action,
+            self.ping_action,
+            self.ip_action,
+            self.system_action,
+            self.credentials_action,
+        ):
+            action.setEnabled(False)
+
+        self._rebuild_tray_menu()
+
+    def _set_stage4_preview_state(
+        self,
+        index: int,
+        *,
+        log_transition: bool,
+    ) -> None:
+        if not self._stage4_preview:
+            return
+        if index < 0 or index >= len(self._stage4_preview_states):
+            return
+
+        previous_mode = self._kill_switch_view_state.mode
+        self._stage4_preview_index = index
+        self._kill_switch_view_state = self._stage4_preview_states[index]
+        state = self._kill_switch_view_state
+        self.kill_switch_status_widget.set_state(state)
+
+        if hasattr(self, "preview_actions"):
+            for action_index, action in enumerate(self.preview_actions):
+                action.blockSignals(True)
+                action.setChecked(action_index == index)
+                action.blockSignals(False)
+
+        if state.mode.value == "ready":
+            self.ip_value.setText("198.51.100.24")
+            self.country_value.setText("Germany" if language() == "en" else "Deutschland")
+            self.ipv6_value.setText(tr("status.ipv6_normal"))
+            self.dns_value.setText(tr("status.dns_system"))
+            self.connection_button.setText(tr("connection.connect"))
+        elif state.mode.value == "active":
+            self.ip_value.setText("203.0.113.42")
+            self.country_value.setText("Netherlands" if language() == "en" else "Niederlande")
+            self.ipv6_value.setText(tr("status.ipv6_blocked"))
+            self.dns_value.setText(tr("status.dns_pia"))
+            self.connection_button.setText(tr("connection.disconnect"))
+        elif state.mode.value == "blocking":
+            self.ip_value.setText("—")
+            self.country_value.setText("—")
+            self.ipv6_value.setText(tr("status.ipv6_blocked"))
+            self.dns_value.setText("—")
+            self.connection_button.setText(tr("connection.connect"))
+        else:
+            self.ip_value.setText(tr("common.unknown"))
+            self.country_value.setText(tr("common.unknown"))
+            self.ipv6_value.setText(tr("common.unknown"))
+            self.dns_value.setText(tr("common.unknown"))
+            self.connection_button.setText(tr("connection.connect"))
+
+        self.connection_button.setEnabled(False)
+        self.tray.setIcon(status_icon(state.icon_state))
+        self.tray.setToolTip(tr(state.tray_tooltip_key))
+        self._rebuild_tray_menu()
+
+        if log_transition and previous_mode != state.mode:
+            self.log(state.log_level, state.log_key)
+        elif log_transition and not self.log_view.toPlainText():
+            self.log(state.log_level, state.log_key)
+
     # ------------------------------------------------------------------
     # Translation and preferences
     # ------------------------------------------------------------------
@@ -685,10 +833,24 @@ class MainWindow(QMainWindow):
         self.quit_disconnect_action.setChecked(quit_behavior == "disconnect")
         self.quit_leave_action.setChecked(quit_behavior == "leave")
 
-        self._populate_region_combo()
-        self._update_system_button()
-        self.update_connection_status(force=True)
-        self._rebuild_tray_menu()
+        if self._stage4_preview:
+            self.system_button.setText(tr("preview.stage4b.notice"))
+            self.preview_menu.setTitle(tr("preview.stage4b.menu"))
+            for action, state in zip(
+                self.preview_actions,
+                self._stage4_preview_states,
+                strict=True,
+            ):
+                action.setText(tr(state.title_key))
+            self._set_stage4_preview_state(
+                self._stage4_preview_index,
+                log_transition=False,
+            )
+        else:
+            self._populate_region_combo()
+            self._update_system_button()
+            self.update_connection_status(force=True)
+            self._rebuild_tray_menu()
 
     def change_language(self, language_code: str) -> None:
         if language_code == language():
@@ -1245,6 +1407,12 @@ class MainWindow(QMainWindow):
         self._run_worker(job, on_success=success, on_failure=failure)
 
     def update_connection_status(self, force: bool = False) -> None:
+        if self._stage4_preview:
+            self._set_stage4_preview_state(
+                self._stage4_preview_index,
+                log_transition=False,
+            )
+            return
         try:
             connected = network_manager.is_connected()
         except BaseException:
@@ -1320,6 +1488,8 @@ class MainWindow(QMainWindow):
             self._rebuild_tray_menu()
 
     def _update_controls(self) -> None:
+        if self._stage4_preview:
+            return
         busy = self._connection_busy or self._regions_busy
         has_regions = bool(self.regions)
         try:
@@ -1385,6 +1555,26 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------
     def _rebuild_tray_menu(self) -> None:
         if not hasattr(self, "tray"):
+            return
+
+        if self._stage4_preview:
+            menu = QMenu()
+            state = self._kill_switch_view_state
+            status_action = QAction(tr(state.tray_status_key), menu)
+            status_action.setIcon(status_dot_icon(state.icon_state))
+            status_action.setEnabled(False)
+            menu.addAction(status_action)
+            menu.addSeparator()
+            show_action = QAction(tr("tray.show"), menu)
+            show_action.triggered.connect(self.show_window)
+            menu.addAction(show_action)
+            quit_action = QAction(tr("tray.quit"), menu)
+            quit_action.triggered.connect(self.request_quit)
+            menu.addAction(quit_action)
+            self.tray.setContextMenu(menu)
+            self._tray_menu = menu
+            self.tray.setIcon(status_icon(state.icon_state))
+            self.tray.setToolTip(tr(state.tray_tooltip_key))
             return
 
         menu = QMenu()
@@ -1525,6 +1715,9 @@ class MainWindow(QMainWindow):
         self._apply_tray_setting(log_change=True)
 
     def _apply_tray_setting(self, *, log_change: bool) -> None:
+        if self._stage4_preview:
+            self.tray.hide()
+            return
         enabled = bool_value(self.settings, "ui/tray_enabled", True)
 
         if enabled and not QSystemTrayIcon.isSystemTrayAvailable():
@@ -1627,6 +1820,9 @@ class MainWindow(QMainWindow):
         self.activateWindow()
 
     def request_quit(self) -> None:
+        if self._stage4_preview:
+            self._final_quit()
+            return
         if self._connection_busy:
             QMessageBox.information(
                 self,
@@ -1670,6 +1866,12 @@ class MainWindow(QMainWindow):
         self.app.quit()
 
     def closeEvent(self, event: QCloseEvent) -> None:
+        if self._stage4_preview:
+            self._allow_close = True
+            event.accept()
+            self.tray.hide()
+            self.app.quit()
+            return
         if self._allow_close:
             event.accept()
             return

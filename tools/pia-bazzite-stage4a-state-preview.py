@@ -98,7 +98,12 @@ class StateCard(QFrame):
         self.title.setStyleSheet(
             f"font-size: 19px; font-weight: 650; color: {color};"
         )
-        self.detail.setText(tr(self.state.detail_key))
+        self.detail.setText(tr(self.state.summary_key))
+        tooltip = tr(self.state.detail_key)
+        self.setToolTip(tooltip)
+        self.shield.setToolTip(tooltip)
+        self.title.setToolTip(tooltip)
+        self.detail.setToolTip(tooltip)
         self.tray_dot.setPixmap(
             status_dot_icon(self.state.icon_state, 18, palette=self.palette()).pixmap(18, 18)
         )
@@ -121,17 +126,15 @@ class PreviewWindow(QMainWindow):
         self.theme_mode = theme_mode
         self.cards: list[StateCard] = []
 
-        self.setWindowTitle("PIA Bazzite — Stage 4A state preview")
+        self.setWindowTitle("")
         self.setWindowIcon(status_icon("application"))
-        self.setMinimumSize(820, 720)
+        self.setMinimumSize(820, 650)
 
         central = QWidget()
         page = QVBoxLayout(central)
         page.setContentsMargins(18, 16, 18, 16)
         page.setSpacing(12)
 
-        title = QLabel("Kill-switch state preview")
-        title.setStyleSheet("font-size: 22px; font-weight: 700;")
         note = QLabel(
             "Simulation only — this preview does not start the helper, Polkit, "
             "NetworkManager, or nftables."
@@ -181,7 +184,6 @@ class PreviewWindow(QMainWindow):
         footer.addStretch()
         footer.addWidget(close_button)
 
-        page.addWidget(title)
         page.addWidget(note)
         page.addLayout(controls)
         page.addLayout(grid)
@@ -218,7 +220,7 @@ def main() -> int:
     set_language(args.language)
 
     app = QApplication(sys.argv)
-    app.setApplicationDisplayName("PIA Bazzite Stage 4A Preview")
+    app.setApplicationDisplayName("PIA Bazzite")
     controller = ThemeController(app)
     controller.apply(args.theme)
 

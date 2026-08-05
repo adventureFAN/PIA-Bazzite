@@ -14,6 +14,7 @@ RESOURCE_DIR = ROOT / "pia_bazzite" / "resources" / "i18n"
 
 REQUIRED_KEYS = {
     *(f"kill_switch.state.{name}" for name in ("ready", "active", "blocking", "error")),
+    *(f"kill_switch.summary.{name}" for name in ("ready", "active", "blocking", "error")),
     *(f"kill_switch.detail.{name}" for name in ("ready", "active", "blocking", "error")),
     *(f"tray.kill_switch_status.{name}" for name in ("ready", "active", "blocking", "error")),
     *(f"tray.kill_switch_tooltip.{name}" for name in ("ready", "active", "blocking", "error")),

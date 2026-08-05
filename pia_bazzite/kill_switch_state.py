@@ -19,8 +19,8 @@ class KillSwitchObservation:
     """Small, immutable input used to derive one trustworthy UI state.
 
     This type intentionally contains no Qt, NetworkManager, Polkit, or nftables
-    code.  Later integration stages can build an observation from the real
-    helper response while tests and the preview tool can construct it directly.
+    code. Later integration stages can build an observation from the real
+    helper response while tests and preview tools can construct it directly.
     """
 
     vpn_connected: bool
@@ -55,6 +55,7 @@ class KillSwitchObservation:
 class KillSwitchViewState:
     mode: KillSwitchMode
     title_key: str
+    summary_key: str
     detail_key: str
     tray_status_key: str
     tray_tooltip_key: str
@@ -77,6 +78,7 @@ class KillSwitchViewState:
 _STATE_METADATA: dict[KillSwitchMode, dict[str, object]] = {
     KillSwitchMode.READY: {
         "title_key": "kill_switch.state.ready",
+        "summary_key": "kill_switch.summary.ready",
         "detail_key": "kill_switch.detail.ready",
         "tray_status_key": "tray.kill_switch_status.ready",
         "tray_tooltip_key": "tray.kill_switch_tooltip.ready",
@@ -88,6 +90,7 @@ _STATE_METADATA: dict[KillSwitchMode, dict[str, object]] = {
     },
     KillSwitchMode.ACTIVE: {
         "title_key": "kill_switch.state.active",
+        "summary_key": "kill_switch.summary.active",
         "detail_key": "kill_switch.detail.active",
         "tray_status_key": "tray.kill_switch_status.active",
         "tray_tooltip_key": "tray.kill_switch_tooltip.active",
@@ -99,6 +102,7 @@ _STATE_METADATA: dict[KillSwitchMode, dict[str, object]] = {
     },
     KillSwitchMode.BLOCKING: {
         "title_key": "kill_switch.state.blocking",
+        "summary_key": "kill_switch.summary.blocking",
         "detail_key": "kill_switch.detail.blocking",
         "tray_status_key": "tray.kill_switch_status.blocking",
         "tray_tooltip_key": "tray.kill_switch_tooltip.blocking",
@@ -110,6 +114,7 @@ _STATE_METADATA: dict[KillSwitchMode, dict[str, object]] = {
     },
     KillSwitchMode.ERROR: {
         "title_key": "kill_switch.state.error",
+        "summary_key": "kill_switch.summary.error",
         "detail_key": "kill_switch.detail.error",
         "tray_status_key": "tray.kill_switch_status.error",
         "tray_tooltip_key": "tray.kill_switch_tooltip.error",
@@ -128,7 +133,7 @@ def derive_kill_switch_view_state(
     """Derive one of the four UI states without optimistic assumptions.
 
     A connected VPN without a present, verified firewall table is an error.
-    A present table with any structural problem is also an error.  The UI only
+    A present table with any structural problem is also an error. The UI only
     reports Active or Blocking when the same verified table guarantees the
     protection in both cases.
     """
@@ -158,6 +163,7 @@ def derive_kill_switch_view_state(
     return KillSwitchViewState(
         mode=mode,
         title_key=str(metadata["title_key"]),
+        summary_key=str(metadata["summary_key"]),
         detail_key=str(metadata["detail_key"]),
         tray_status_key=str(metadata["tray_status_key"]),
         tray_tooltip_key=str(metadata["tray_tooltip_key"]),
@@ -171,7 +177,7 @@ def derive_kill_switch_view_state(
 
 
 def sample_kill_switch_states() -> tuple[KillSwitchViewState, ...]:
-    """Return deterministic states for the safe stage-4A preview."""
+    """Return deterministic states for safe stage-4 previews."""
 
     return (
         derive_kill_switch_view_state(
