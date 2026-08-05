@@ -1,0 +1,13 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+from pathlib import Path
+import sys
+
+HELPER_ROOT = Path(__file__).resolve().parent
+if str(HELPER_ROOT) not in sys.path:
+    sys.path.insert(0, str(HELPER_ROOT))
+
+from pia_bazzite_kill_switch_helper.cli import main
+
+raise SystemExit(main())
