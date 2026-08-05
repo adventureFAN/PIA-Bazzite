@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.adventurefan.PIABazzite</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT</project_license>
+  <name>PIA Bazzite</name>
+  <summary>Unofficial Private Internet Access client for Bazzite</summary>
+  <summary xml:lang="de">Inoffizieller Private-Internet-Access-Client für Bazzite</summary>
+  <description>
+    <p>
+      PIA Bazzite is an unofficial desktop client for Private Internet
+      Access on Bazzite. It creates native WireGuard connections through
+      NetworkManager without the official manual-connections scripts.
+    </p>
+    <p>
+      It provides location selection, latency measurements, public-IP
+      status, temporary IPv6 protection, a system tray, an optional live
+      log, and English and German interfaces.
+    </p>
+    <p xml:lang="de">
+      PIA Bazzite ist ein inoffizieller Desktop-Client für Private
+      Internet Access unter Bazzite. Er erstellt native
+      WireGuard-Verbindungen über NetworkManager, ohne die offiziellen
+      manual-connections-Skripte zu benötigen.
+    </p>
+  </description>
+  <launchable type="desktop-id">io.github.adventurefan.PIABazzite.desktop</launchable>
+  <url type="homepage">https://github.com/adventureFAN/PIA-Bazzite</url>
+  <url type="bugtracker">https://github.com/adventureFAN/PIA-Bazzite/issues</url>
+  <url type="vcs-browser">https://github.com/adventureFAN/PIA-Bazzite</url>
+  <developer id="io.github.adventurefan">
+    <name>adventureFAN</name>
+  </developer>
+  <provides>
+    <binary>PIA-Bazzite</binary>
+  </provides>
+  <requires>
+    <display_length compare="ge">360</display_length>
+  </requires>
+  <supports>
+    <control>pointing</control>
+    <control>keyboard</control>
+  </supports>
+  <content_rating type="oars-1.1"/>
+  <releases>
+    <release version="0.5.0" date="2026-08-03">
+      <description>
+        <p>First public release with AppImage packaging, final PIA shield
+        icons, native Plasma tray behavior, English and German UI, and
+        GitHub release automation.</p>
+      </description>
+    </release>
+  </releases>
+</component>

@@ -1,0 +1,22 @@
+name: CI
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  self-test:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+      - name: Run static self-test
+        run: python self_test.py
+      - name: Validate XML
+        run: python -c "import xml.etree.ElementTree as ET; ET.parse('packaging/io.github.adventurefan.PIABazzite.metainfo.xml')"

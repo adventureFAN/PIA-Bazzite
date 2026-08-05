@@ -1,0 +1,17 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=PIA Bazzite
+Comment=Connect to Private Internet Access through WireGuard on Bazzite
+Comment[de]=Mit Private Internet Access über WireGuard unter Bazzite verbinden
+Exec=PIA-Bazzite
+TryExec=PIA-Bazzite
+Icon=io.github.adventurefan.PIABazzite
+Terminal=false
+Categories=Network;Security;Qt;
+Keywords=VPN;WireGuard;PIA;Privacy;Bazzite;
+Keywords[de]=VPN;WireGuard;PIA;Privatsphäre;Bazzite;
+StartupNotify=true
+StartupWMClass=PIA Bazzite
+X-GNOME-UsesNotifications=true
+X-AppImage-Version=0.5.0

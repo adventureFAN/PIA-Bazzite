@@ -1,0 +1,35 @@
+.venv/
+__pycache__/
+*.py[cod]
+*.log
+.cache/
+.pytest_cache/
+.idea/
+.vscode/
+pia_*_test_report*.txt
+build/
+dist/
+*.AppImage
+*.AppImage.sha256
+pia_v05_self_test_report.txt
+
+# Local test results and generated diagnostics
+test-results/
+
+# Local archives and checksums
+*.zip
+*.tar.gz
+*.sha256
+
+# Additional Python tool caches
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Editor and desktop leftovers
+*.bak
+*~
+.directory
+.DS_Store
+Thumbs.db

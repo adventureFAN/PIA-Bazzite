@@ -1,0 +1,56 @@
+name: Bug report
+description: Report a reproducible problem in PIA Bazzite
+title: "[Bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Never paste passwords, PIA tokens, WireGuard private keys, or unmasked public IP addresses.
+  - type: input
+    id: version
+    attributes:
+      label: PIA Bazzite version
+      placeholder: "0.5.0"
+    validations:
+      required: true
+  - type: input
+    id: bazzite
+    attributes:
+      label: Bazzite version and desktop
+      placeholder: "Bazzite 44, KDE Plasma"
+    validations:
+      required: true
+  - type: dropdown
+    id: package
+    attributes:
+      label: How was PIA Bazzite started?
+      options:
+        - AppImage integrated with Gear Lever
+        - AppImage without integration
+        - Source checkout
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+  - type: textarea
+    id: log
+    attributes:
+      label: Sanitized live log
+      description: Remove all sensitive information before posting.

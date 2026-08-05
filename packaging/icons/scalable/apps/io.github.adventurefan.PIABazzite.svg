@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <path fill="#2e7d32" d="M256 51 C358 51 430 74 451 128 L430 292
+    C410 394 328 456 256 486 C184 456 102 394 82 292 L61 128
+    C82 74 154 51 256 51 Z"/>
+  <text x="256" y="306" text-anchor="middle"
+    fill="#ffffff" font-family="sans-serif" font-size="128"
+    font-weight="700">PIA</text>
+</svg>

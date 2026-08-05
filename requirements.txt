@@ -1,0 +1,4 @@
+PySide6-Essentials==6.11.1
+keyring==25.7.0
+SecretStorage==3.5.0
+requests==2.32.4
