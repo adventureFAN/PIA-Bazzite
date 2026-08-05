@@ -1,18 +1,62 @@
 from __future__ import annotations
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QColor, QIcon, QPainter, QPainterPath, QPen, QPixmap
+from PySide6.QtGui import (
+    QColor,
+    QGuiApplication,
+    QIcon,
+    QPainter,
+    QPainterPath,
+    QPalette,
+    QPen,
+    QPixmap,
+)
+
+from .kill_switch_state import status_color_hex
 
 
-def status_icon(state: str, size: int = 64) -> QIcon:
-    """Create the flat PIA shield used by the app and system tray."""
-    colors = {
-        "connected": QColor("#2e7d32"),
-        "disconnected": QColor("#c62828"),
-        "busy": QColor("#ef6c00"),
-        "application": QColor("#2e7d32"),
-    }
-    color = colors.get(state, colors["application"])
+# Keep the application icon permanently green.  Connection and kill-switch
+# state changes are represented only by the tray/status icons.
+_FIXED_COLORS = {
+    "application": QColor("#2e7d32"),
+}
+
+
+def _palette_is_dark(palette: QPalette | None = None) -> bool:
+    active_palette = palette
+    if active_palette is None:
+        app = QGuiApplication.instance()
+        active_palette = app.palette() if app is not None else QPalette()
+    color = active_palette.color(QPalette.ColorRole.Window)
+    luminance = (0.2126 * color.red()) + (0.7152 * color.green()) + (0.0722 * color.blue())
+    return luminance < 128
+
+
+def _status_color(state: str, palette: QPalette | None = None) -> QColor:
+    if state == "application":
+        return _FIXED_COLORS["application"]
+    return QColor(status_color_hex(state, dark_mode=_palette_is_dark(palette)))
+
+
+def status_icon(
+    state: str,
+    size: int = 64,
+    *,
+    palette: QPalette | None = None,
+) -> QIcon:
+    """Create the flat PIA shield used by the app and system tray.
+
+    The stage-4 state colors are:
+    - neutral gray: ready / intentionally disconnected;
+    - green: VPN connected and kill switch verified;
+    - orange: VPN unavailable while the kill switch is blocking;
+    - red: protection cannot be guaranteed.
+
+    The legacy connected/disconnected/busy names remain accepted so the
+    existing v0.5.0 GUI can migrate without a flag-day rewrite.
+    """
+
+    color = _status_color(state, palette)
 
     pixmap = QPixmap(size, size)
     pixmap.fill(Qt.GlobalColor.transparent)
@@ -20,7 +64,6 @@ def status_icon(state: str, size: int = 64) -> QIcon:
     painter = QPainter(pixmap)
     painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
 
-    # Rounded shield silhouette.
     margin = size * 0.10
     path = QPainterPath()
     path.moveTo(size / 2, margin)
@@ -47,9 +90,15 @@ def status_icon(state: str, size: int = 64) -> QIcon:
     return QIcon(pixmap)
 
 
-def status_dot_icon(state: str, size: int = 16) -> QIcon:
-    """Create a small native-looking red/green status dot for menus."""
-    color = QColor("#2e7d32" if state == "connected" else "#c62828")
+def status_dot_icon(
+    state: str,
+    size: int = 16,
+    *,
+    palette: QPalette | None = None,
+) -> QIcon:
+    """Create the small state dot used in the tray context menu."""
+
+    color = _status_color(state, palette)
     pixmap = QPixmap(size, size)
     pixmap.fill(Qt.GlobalColor.transparent)
 
