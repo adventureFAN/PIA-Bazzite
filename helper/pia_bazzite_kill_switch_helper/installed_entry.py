@@ -9,7 +9,8 @@ import sys
 from typing import Mapping, Sequence
 
 from .cli import EXIT_PRIVILEGE, EXIT_SAFETY, main as helper_main
-from .core import HELPER_STAGE, SCHEMA_VERSION
+from .core import HELPER_STAGE
+from .protocol import error_payload, infer_action
 
 INSTALL_ROOT = Path("/usr/local/libexec/pia-bazzite")
 INSTALLED_LAUNCHER = INSTALL_ROOT / "pia-bazzite-kill-switch-helper"
@@ -22,6 +23,7 @@ EXPECTED_FILES: Mapping[str, int] = {
     "pia_bazzite_kill_switch_helper/cli.py": 0o644,
     "pia_bazzite_kill_switch_helper/core.py": 0o644,
     "pia_bazzite_kill_switch_helper/runner.py": 0o644,
+    "pia_bazzite_kill_switch_helper/protocol.py": 0o644,
     "pia_bazzite_kill_switch_helper/installed_entry.py": 0o644,
 }
 
@@ -34,16 +36,15 @@ class AuthorizationBoundaryError(RuntimeError):
     """Raised when execution did not originate from a non-root pkexec caller."""
 
 
-def _emit_error(kind: str, message: str, code: int) -> int:
+def _emit_error(action: str | None, kind: str, message: str, code: int) -> int:
     print(
         json.dumps(
-            {
-                "ok": False,
-                "schema_version": SCHEMA_VERSION,
-                "helper_stage": HELPER_STAGE,
-                "error": kind,
-                "message": message,
-            },
+            error_payload(
+                action=action,
+                helper_stage=HELPER_STAGE,
+                kind=kind,
+                message=message,
+            ),
             sort_keys=True,
         ),
         file=sys.stderr,
@@ -184,16 +185,18 @@ def sanitize_environment(invoking_uid: int) -> None:
 
 
 def main(argv: Sequence[str] | None = None, *, launcher_path: Path | None = None) -> int:
+    raw_argv = list(sys.argv[1:] if argv is None else argv)
+    action = infer_action(raw_argv).action
     actual_launcher = Path(sys.argv[0]) if launcher_path is None else launcher_path
     try:
         verify_installation(actual_launcher)
         invoking_uid = verify_pkexec_authorization()
         sanitize_environment(invoking_uid)
-        return helper_main(argv)
+        return helper_main(raw_argv)
     except AuthorizationBoundaryError as exc:
-        return _emit_error("privilege", str(exc), EXIT_PRIVILEGE)
+        return _emit_error(action, "privilege", str(exc), EXIT_PRIVILEGE)
     except InstallationBoundaryError as exc:
-        return _emit_error("installation-boundary", str(exc), EXIT_SAFETY)
+        return _emit_error(action, "installation-boundary", str(exc), EXIT_SAFETY)
 
 
 __all__ = [

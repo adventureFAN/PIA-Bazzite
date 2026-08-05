@@ -12,7 +12,6 @@ from typing import Iterator, Sequence
 
 from .core import (
     HELPER_STAGE,
-    SCHEMA_VERSION,
     TABLE_NAME,
     ValidationError,
     disabled_status,
@@ -23,6 +22,7 @@ from .core import (
     render_enable_ruleset,
     render_remove_endpoint,
 )
+from .protocol import error_payload, infer_action, success_payload
 from .runner import NftError, NftRunner
 
 LOCK_PATH = Path("/run/lock/pia-bazzite-kill-switch-helper-stage1.lock")
@@ -37,8 +37,17 @@ class SafetyBoundaryError(RuntimeError):
     pass
 
 
+class JsonArgumentError(ValueError):
+    pass
+
+
+class JsonArgumentParser(argparse.ArgumentParser):
+    def error(self, message: str) -> None:
+        raise JsonArgumentError(message)
+
+
 def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
+    parser = JsonArgumentParser(
         prog="pia-bazzite-kill-switch-helper",
         description=(
             "Restricted stage-1 test helper. It can only manage the fixed "
@@ -74,15 +83,14 @@ def _emit(payload: dict[str, object], *, stream: object = sys.stdout) -> None:
     print(json.dumps(payload, sort_keys=True), file=stream)
 
 
-def _error(kind: str, message: str, code: int) -> int:
+def _error(action: str | None, kind: str, message: str, code: int) -> int:
     _emit(
-        {
-            "ok": False,
-            "schema_version": SCHEMA_VERSION,
-            "helper_stage": HELPER_STAGE,
-            "error": kind,
-            "message": message,
-        },
+        error_payload(
+            action=action,
+            helper_stage=HELPER_STAGE,
+            kind=kind,
+            message=message,
+        ),
         stream=sys.stderr,
     )
     return code
@@ -130,25 +138,35 @@ def _exclusive_lock() -> Iterator[None]:
         # The file is intentionally retained as a root-owned lock anchor.
 
 
-def _status(runner: NftRunner) -> tuple[dict[str, object], int]:
+def _status(runner: NftRunner, *, action: str) -> tuple[dict[str, object], int]:
     if not runner.table_exists():
         status = disabled_status()
-        return {"ok": True, **status}, 0
+        return success_payload(action=action, helper_stage=HELPER_STAGE, fields=status), 0
 
     result = runner.list_table_json()
     if result.returncode != 0:
         detail = (result.stderr or result.stdout or "could not read test table").strip()
         raise NftError(detail)
     status = parse_status_json(result.stdout)
-    return {"ok": bool(status["verified"]), **status}, 0 if status["verified"] else EXIT_VERIFY
+    if status["verified"]:
+        return success_payload(action=action, helper_stage=HELPER_STAGE, fields=status), 0
+    payload = success_payload(action=action, helper_stage=HELPER_STAGE, fields=status)
+    payload["ok"] = False
+    payload["error"] = "verification"
+    payload["message"] = "The helper table exists but failed structural verification."
+    return payload, EXIT_VERIFY
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    raw_argv = list(sys.argv[1:] if argv is None else argv)
+    request_context = infer_action(raw_argv)
+    action: str | None = request_context.action
     try:
-        args = _parser().parse_args(argv)
+        args = _parser().parse_args(raw_argv)
+        action = args.action
 
         # Validate and render all user-controlled input before touching the
-        # privileged lock file or invoking nftables.  Apart from producing a
+        # privileged lock file or invoking nftables. Apart from producing a
         # deterministic validation error, this keeps malformed requests free
         # of privileged side effects.
         script: str | None = None
@@ -168,7 +186,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         runner = NftRunner()
 
         if args.action == "status":
-            payload, code = _status(runner)
+            payload, code = _status(runner, action=args.action)
             _emit(payload, stream=sys.stdout if code == 0 else sys.stderr)
             return code
 
@@ -177,21 +195,20 @@ def main(argv: Sequence[str] | None = None) -> int:
             runner.check_script(script)
             runner.apply_script(script)
 
-            payload, code = _status(runner)
-            payload["action"] = args.action
+            payload, code = _status(runner, action=args.action)
             _emit(payload, stream=sys.stdout if code == 0 else sys.stderr)
             return code
 
-    except ValidationError as exc:
-        return _error("validation", str(exc), EXIT_VALIDATION)
+    except (JsonArgumentError, ValidationError) as exc:
+        return _error(action, "validation", str(exc), EXIT_VALIDATION)
     except PermissionError as exc:
-        return _error("privilege", str(exc), EXIT_PRIVILEGE)
+        return _error(action, "privilege", str(exc), EXIT_PRIVILEGE)
     except SafetyBoundaryError as exc:
-        return _error("safety-boundary", str(exc), EXIT_SAFETY)
+        return _error(action, "safety-boundary", str(exc), EXIT_SAFETY)
     except NftError as exc:
-        return _error("nftables", str(exc), EXIT_NFT)
+        return _error(action, "nftables", str(exc), EXIT_NFT)
     except OSError as exc:
-        return _error("operating-system", str(exc), EXIT_NFT)
+        return _error(action, "operating-system", str(exc), EXIT_NFT)
 
 
 if __name__ == "__main__":

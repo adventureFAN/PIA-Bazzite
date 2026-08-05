@@ -104,6 +104,7 @@ class InstalledFilesStaticTests(unittest.TestCase):
         self.assertTrue(text.startswith("#!/usr/bin/python3 -I\n"))
         self.assertIn('/usr/local/libexec/pia-bazzite', text)
         self.assertNotIn("PYTHONPATH", text)
+        self.assertIn("pia_bazzite_kill_switch_helper/protocol.py", installed_entry.EXPECTED_FILES)
 
     def test_installer_has_fixed_scope_and_no_recursive_removal(self) -> None:
         text = INSTALLER.read_text(encoding="utf-8")
@@ -113,6 +114,7 @@ class InstalledFilesStaticTests(unittest.TestCase):
         self.assertNotIn("eval ", text)
         self.assertNotIn("INSTALL_ROOT=", text)
         self.assertNotIn("TARGET_DIR=${", text)
+        self.assertIn("protocol.py", text)
 
 
 if __name__ == "__main__":

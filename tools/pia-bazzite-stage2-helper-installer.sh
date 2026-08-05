@@ -12,6 +12,7 @@ SOURCE_FILES=(
   "helper/pia_bazzite_kill_switch_helper/cli.py"
   "helper/pia_bazzite_kill_switch_helper/core.py"
   "helper/pia_bazzite_kill_switch_helper/runner.py"
+  "helper/pia_bazzite_kill_switch_helper/protocol.py"
   "helper/pia_bazzite_kill_switch_helper/installed_entry.py"
 )
 
@@ -106,6 +107,7 @@ for relative in (
     "helper/pia_bazzite_kill_switch_helper/cli.py",
     "helper/pia_bazzite_kill_switch_helper/core.py",
     "helper/pia_bazzite_kill_switch_helper/runner.py",
+    "helper/pia_bazzite_kill_switch_helper/protocol.py",
     "helper/pia_bazzite_kill_switch_helper/installed_entry.py",
 ):
     source = root / relative
@@ -115,7 +117,7 @@ PY
   ensure_directories
   check_existing_target_file "$TARGET_LAUNCHER"
   check_existing_target_file "$TARGET_MANIFEST"
-  for relative in __init__.py cli.py core.py runner.py installed_entry.py; do
+  for relative in __init__.py cli.py core.py runner.py protocol.py installed_entry.py; do
     check_existing_target_file "$TARGET_PACKAGE/$relative"
   done
 
@@ -125,7 +127,7 @@ PY
     -- "$root/helper/pia-bazzite-kill-switch-helper-installed" "$temporary"
   /usr/bin/mv -fT -- "$temporary" "$TARGET_LAUNCHER"
 
-  for relative in __init__.py cli.py core.py runner.py installed_entry.py; do
+  for relative in __init__.py cli.py core.py runner.py protocol.py installed_entry.py; do
     source="$root/helper/pia_bazzite_kill_switch_helper/$relative"
     target="$TARGET_PACKAGE/$relative"
     temporary="$TARGET_PACKAGE/.$relative.$$"
@@ -150,6 +152,7 @@ relative_files = (
     "pia_bazzite_kill_switch_helper/cli.py",
     "pia_bazzite_kill_switch_helper/core.py",
     "pia_bazzite_kill_switch_helper/runner.py",
+    "pia_bazzite_kill_switch_helper/protocol.py",
     "pia_bazzite_kill_switch_helper/installed_entry.py",
 )
 
@@ -179,7 +182,7 @@ PY
     || fail "Installed launcher ownership or mode is incorrect."
   [ "$(stat -c '%u:%g:%a' -- "$TARGET_MANIFEST")" = "0:0:644" ] \
     || fail "Installed manifest ownership or mode is incorrect."
-  for relative in __init__.py cli.py core.py runner.py installed_entry.py; do
+  for relative in __init__.py cli.py core.py runner.py protocol.py installed_entry.py; do
     [ "$(stat -c '%u:%g:%a' -- "$TARGET_PACKAGE/$relative")" = "0:0:644" ] \
       || fail "Installed module ownership or mode is incorrect: $relative"
   done
@@ -213,7 +216,7 @@ uninstall_helper() {
   local relative
   remove_regular_root_file "$TARGET_LAUNCHER"
   remove_regular_root_file "$TARGET_MANIFEST"
-  for relative in __init__.py cli.py core.py runner.py installed_entry.py; do
+  for relative in __init__.py cli.py core.py runner.py protocol.py installed_entry.py; do
     remove_regular_root_file "$TARGET_PACKAGE/$relative"
   done
   /usr/bin/rmdir --ignore-fail-on-non-empty "$TARGET_PACKAGE" 2>/dev/null || true
@@ -230,6 +233,7 @@ show_status() {
     "$TARGET_PACKAGE/cli.py" \
     "$TARGET_PACKAGE/core.py" \
     "$TARGET_PACKAGE/runner.py" \
+    "$TARGET_PACKAGE/protocol.py" \
     "$TARGET_PACKAGE/installed_entry.py"
   do
     if [ -e "$relative" ]; then

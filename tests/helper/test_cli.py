@@ -7,6 +7,7 @@ from unittest.mock import Mock, patch
 
 from helper.pia_bazzite_kill_switch_helper import cli
 from helper.pia_bazzite_kill_switch_helper.core import TABLE_NAME
+from helper.pia_bazzite_kill_switch_helper.protocol import PROTOCOL_VERSION
 from helper.pia_bazzite_kill_switch_helper.runner import CommandResult
 
 
@@ -20,6 +21,8 @@ class CliTests(unittest.TestCase):
         self.assertEqual(code, cli.EXIT_PRIVILEGE)
         payload = json.loads(stderr.getvalue())
         self.assertEqual(payload["error"], "privilege")
+        self.assertEqual(payload["action"], "status")
+        self.assertEqual(payload["protocol_version"], PROTOCOL_VERSION)
 
     @patch("helper.pia_bazzite_kill_switch_helper.cli._require_isolated_network_namespace")
     @patch("helper.pia_bazzite_kill_switch_helper.cli.os.geteuid", return_value=0)
@@ -35,6 +38,8 @@ class CliTests(unittest.TestCase):
         self.assertTrue(payload["ok"])
         self.assertEqual(payload["state"], "disabled")
         self.assertEqual(payload["table"], TABLE_NAME)
+        self.assertEqual(payload["action"], "status")
+        self.assertEqual(payload["protocol_version"], PROTOCOL_VERSION)
 
     @patch("helper.pia_bazzite_kill_switch_helper.cli._exclusive_lock")
     @patch("helper.pia_bazzite_kill_switch_helper.cli._require_isolated_network_namespace")
@@ -101,6 +106,31 @@ class CliTests(unittest.TestCase):
             ])
         self.assertEqual(code, cli.EXIT_VALIDATION)
         lock.assert_not_called()
+        runner_cls.assert_not_called()
+
+    @patch("helper.pia_bazzite_kill_switch_helper.cli.NftRunner")
+    def test_missing_required_argument_returns_json_without_nft(self, runner_cls) -> None:
+        stderr = io.StringIO()
+        with patch("sys.stderr", stderr):
+            code = cli.main(["enable", "--interface", "wlo1"])
+        self.assertEqual(code, cli.EXIT_VALIDATION)
+        payload = json.loads(stderr.getvalue())
+        self.assertFalse(payload["ok"])
+        self.assertEqual(payload["action"], "enable")
+        self.assertEqual(payload["error"], "validation")
+        self.assertEqual(payload["protocol_version"], PROTOCOL_VERSION)
+        runner_cls.assert_not_called()
+
+    @patch("helper.pia_bazzite_kill_switch_helper.cli.NftRunner")
+    def test_unknown_action_returns_json_without_nft(self, runner_cls) -> None:
+        stderr = io.StringIO()
+        with patch("sys.stderr", stderr):
+            code = cli.main(["not-a-real-action"])
+        self.assertEqual(code, cli.EXIT_VALIDATION)
+        payload = json.loads(stderr.getvalue())
+        self.assertFalse(payload["ok"])
+        self.assertEqual(payload["action"], "unknown")
+        self.assertEqual(payload["error"], "validation")
         runner_cls.assert_not_called()
 
     @patch("helper.pia_bazzite_kill_switch_helper.cli.os.geteuid", return_value=0)

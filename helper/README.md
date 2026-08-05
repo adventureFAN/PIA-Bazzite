@@ -32,3 +32,9 @@ Design and test details are documented in:
 
 - `docs/kill-switch/HELPER_STAGE1.md`
 - `docs/kill-switch/POLKIT_STAGE2.md`
+
+## Protocol v1 milestone
+
+Stage 2D.1 adds a deterministic JSON protocol envelope for every normal helper
+result and every handled failure. The host-network safety refusal remains in
+place; see `docs/kill-switch/HELPER_PROTOCOL_V1.md`.

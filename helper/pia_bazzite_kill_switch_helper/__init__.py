@@ -1,5 +1,7 @@
 """Restricted PIA Bazzite session kill-switch helper (stage 1 test build)."""
 
+from .protocol import PROTOCOL_VERSION
+
 from .core import (
     CHAIN_NAME,
     ENDPOINT_SET_V4,
@@ -18,6 +20,7 @@ __all__ = [
     "HELPER_STAGE",
     "TABLE_NAME",
     "VPN_INTERFACE",
+    "PROTOCOL_VERSION",
     "Endpoint",
     "ValidationError",
 ]
