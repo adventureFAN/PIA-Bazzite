@@ -54,3 +54,21 @@ rules.
 
 The new fixed protocol actions are `set-interfaces` and `set-endpoints`. Host
 operation, GUI integration, and a production table name remain disabled.
+
+## Stage 2E installation boundary
+
+Stage 2E moves the checksum and ownership verification into the standalone
+installed launcher before any helper package module is imported. The manifest
+now binds the installation format, helper stage, protocol version, and exact
+file list. The installer serializes operations with a lock and preflights every
+known file before uninstalling anything.
+
+```bash
+./tools/kill-switch-helper-stage2e-self-test.sh
+./tools/kill-switch-helper-stage2e-security-test.sh
+```
+
+The interactive security test deliberately cancels one graphical Polkit prompt,
+then checks checksum tampering, unsafe modes, wrong manifest identity, symlink
+uninstall refusal, and preservation of unknown files. It never creates a
+firewall table and does not use NetworkManager.

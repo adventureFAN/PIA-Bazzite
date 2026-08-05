@@ -16,6 +16,7 @@ INSTALL_ROOT = Path("/usr/local/libexec/pia-bazzite")
 INSTALLED_LAUNCHER = INSTALL_ROOT / "pia-bazzite-kill-switch-helper"
 INSTALLED_PACKAGE = INSTALL_ROOT / "pia_bazzite_kill_switch_helper"
 MANIFEST = INSTALL_ROOT / "kill-switch-helper-manifest.json"
+INSTALL_FORMAT = 1
 
 EXPECTED_FILES: Mapping[str, int] = {
     "pia-bazzite-kill-switch-helper": 0o755,
@@ -136,8 +137,18 @@ def verify_installation(
     if resolved_manifest != resolved_root / manifest_path.name:
         raise InstallationBoundaryError("Helper manifest escaped the fixed helper directory.")
     manifest = _load_manifest(manifest_path)
+    required_keys = {"schema_version", "install_format", "helper_stage", "protocol_version", "files"}
+    if set(manifest) != required_keys:
+        raise InstallationBoundaryError("Helper manifest shape is incomplete or unexpected.")
     if manifest.get("schema_version") != 1:
         raise InstallationBoundaryError("Unsupported helper manifest schema version.")
+    if manifest.get("install_format") != INSTALL_FORMAT:
+        raise InstallationBoundaryError("Unsupported helper installation format.")
+    if manifest.get("helper_stage") != HELPER_STAGE:
+        raise InstallationBoundaryError("Installed helper stage does not match this package.")
+    from .protocol import PROTOCOL_VERSION
+    if manifest.get("protocol_version") != PROTOCOL_VERSION:
+        raise InstallationBoundaryError("Installed helper protocol version does not match this package.")
     files = manifest.get("files")
     if not isinstance(files, dict) or set(files) != set(EXPECTED_FILES):
         raise InstallationBoundaryError("Helper manifest file list is incomplete or unexpected.")
@@ -204,6 +215,7 @@ __all__ = [
     "EXPECTED_FILES",
     "INSTALL_ROOT",
     "INSTALLED_LAUNCHER",
+    "INSTALL_FORMAT",
     "InstallationBoundaryError",
     "MANIFEST",
     "main",

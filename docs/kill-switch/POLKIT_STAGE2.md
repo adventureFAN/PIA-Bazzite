@@ -120,3 +120,14 @@ installed helper with one entirely hard-coded `enable` request. It accepts no
 helper action, interface, endpoint, executable path, or shell command from the
 user. The bridge is removed explicitly at the end of the test and is not part
 of the production helper design.
+
+## Stage 2E denial and installation-integrity tests
+
+Stage 2E adds an explicit cancelled-authorization test. Temporary
+authorizations are revoked before `pkexec --disable-internal-agent` is called,
+and the expected result is the dedicated `pkexec` dismissal exit code. The
+helper must not execute and no host firewall table may appear.
+
+The root-owned launcher now performs all ownership, mode, manifest-identity,
+and checksum checks before importing the installed helper package. See
+`HELPER_STAGE2E.md` for the complete test matrix.

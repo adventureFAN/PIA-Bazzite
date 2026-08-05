@@ -27,6 +27,9 @@ class InstalledBoundaryTests(unittest.TestCase):
             json.dumps(
                 {
                     "schema_version": 1,
+                    "install_format": installed_entry.INSTALL_FORMAT,
+                    "helper_stage": 2,
+                    "protocol_version": 1,
                     "files": {name: "a" * 64 for name in installed_entry.EXPECTED_FILES},
                 }
             ),
@@ -48,6 +51,45 @@ class InstalledBoundaryTests(unittest.TestCase):
                     manifest_path=manifest,
                 )
         self.assertEqual(set(result), set(installed_entry.EXPECTED_FILES))
+
+    def test_wrong_manifest_identity_is_rejected(self) -> None:
+        for field, value in (
+            ("install_format", 999),
+            ("helper_stage", 999),
+            ("protocol_version", 999),
+        ):
+            with self.subTest(field=field), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary) / "pia-bazzite"
+                launcher, manifest = self._temporary_install(root)
+                payload = json.loads(manifest.read_text(encoding="utf-8"))
+                payload[field] = value
+                manifest.write_text(json.dumps(payload), encoding="utf-8")
+                with patch.object(installed_entry, "_verify_safe_directory"), \
+                        patch.object(installed_entry, "_verify_safe_file"):
+                    with self.assertRaises(installed_entry.InstallationBoundaryError):
+                        installed_entry.verify_installation(
+                            launcher,
+                            install_root=root,
+                            installed_launcher=launcher,
+                            manifest_path=manifest,
+                        )
+
+    def test_unexpected_manifest_key_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "pia-bazzite"
+            launcher, manifest = self._temporary_install(root)
+            payload = json.loads(manifest.read_text(encoding="utf-8"))
+            payload["unexpected"] = True
+            manifest.write_text(json.dumps(payload), encoding="utf-8")
+            with patch.object(installed_entry, "_verify_safe_directory"), \
+                    patch.object(installed_entry, "_verify_safe_file"):
+                with self.assertRaises(installed_entry.InstallationBoundaryError):
+                    installed_entry.verify_installation(
+                        launcher,
+                        install_root=root,
+                        installed_launcher=launcher,
+                        manifest_path=manifest,
+                    )
 
     def test_launcher_outside_fixed_path_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -99,14 +141,26 @@ class InstalledBoundaryTests(unittest.TestCase):
 
 
 class InstalledFilesStaticTests(unittest.TestCase):
-    def test_launcher_uses_isolated_python_and_fixed_path(self) -> None:
+    def test_launcher_verifies_before_importing_installed_package(self) -> None:
+        text = LAUNCHER_SOURCE.read_text(encoding="utf-8")
+        verify_call = text.index("_verify_installation()")
+        package_import = text.index("from pia_bazzite_kill_switch_helper.installed_entry")
+        self.assertLess(verify_call, package_import)
+        prefix = text[:package_import]
+        self.assertNotIn("from pia_bazzite_kill_switch_helper", prefix)
+        self.assertNotIn("import pia_bazzite_kill_switch_helper", prefix)
+
+    def test_launcher_bootstrap_has_fixed_scope_and_isolated_python(self) -> None:
         text = LAUNCHER_SOURCE.read_text(encoding="utf-8")
         self.assertTrue(text.startswith("#!/usr/bin/python3 -I\n"))
-        self.assertIn('/usr/local/libexec/pia-bazzite', text)
-        self.assertNotIn("PYTHONPATH", text)
-        self.assertIn("pia_bazzite_kill_switch_helper/protocol.py", installed_entry.EXPECTED_FILES)
+        self.assertIn("/usr/local/libexec/pia-bazzite", text)
+        self.assertIn("EXPECTED_FILES", text)
+        self.assertIn("Installed helper checksum mismatch", text)
+        self.assertNotIn("subprocess", text)
+        self.assertNotIn("shell=True", text)
+        self.assertNotIn("eval(", text)
 
-    def test_installer_has_fixed_scope_and_no_recursive_removal(self) -> None:
+    def test_installer_has_fixed_scope_lock_and_preflight_uninstall(self) -> None:
         text = INSTALLER.read_text(encoding="utf-8")
         self.assertIn('TARGET_DIR="/usr/local/libexec/pia-bazzite"', text)
         self.assertIn('TARGET_LAUNCHER="$TARGET_DIR/pia-bazzite-kill-switch-helper"', text)
@@ -115,6 +169,12 @@ class InstalledFilesStaticTests(unittest.TestCase):
         self.assertNotIn("INSTALL_ROOT=", text)
         self.assertNotIn("TARGET_DIR=${", text)
         self.assertIn("protocol.py", text)
+        self.assertIn("install_format", text)
+        self.assertIn("helper_stage", text)
+        self.assertIn("protocol_version", text)
+        self.assertIn("flock -n", text)
+        self.assertIn("preflight_uninstall", text)
+        self.assertLess(text.index("preflight_uninstall\n"), text.index('remove_regular_root_file "$TARGET_LAUNCHER"'))
 
 
 if __name__ == "__main__":

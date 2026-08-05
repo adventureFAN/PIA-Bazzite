@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+umask 022
 
 TARGET_DIR="/usr/local/libexec/pia-bazzite"
 TARGET_LAUNCHER="$TARGET_DIR/pia-bazzite-kill-switch-helper"
@@ -27,6 +28,12 @@ project_root() {
 
 require_root() {
   [ "${EUID:-$(id -u)}" -eq 0 ] || fail "This installer must run as root."
+}
+
+acquire_lock() {
+  /usr/bin/install -d -o root -g root -m 0755 /run/lock
+  exec 9>/run/lock/pia-bazzite-stage2-helper-installer.lock
+  /usr/bin/flock -n 9 || fail "Another helper installation operation is already running."
 }
 
 check_safe_directory() {
@@ -165,6 +172,9 @@ def sha256(path: Path) -> str:
 
 payload = {
     "schema_version": 1,
+    "install_format": 1,
+    "helper_stage": 2,
+    "protocol_version": 1,
     "files": {name: sha256(root / name) for name in relative_files},
 }
 temporary = manifest.with_name(f".{manifest.name}.{os.getpid()}")
@@ -212,8 +222,29 @@ remove_regular_root_file() {
   fi
 }
 
+preflight_uninstall_file() {
+  local path="$1"
+  if [ -L "$path" ]; then
+    fail "Refusing symbolic-link target before uninstall: $path"
+  elif [ -e "$path" ]; then
+    [ -f "$path" ] || fail "Refusing non-regular target before uninstall: $path"
+    [ "$(stat -c '%u:%g' -- "$path")" = "0:0" ] \
+      || fail "Refusing target not owned by root:root before uninstall: $path"
+  fi
+}
+
+preflight_uninstall() {
+  local relative
+  preflight_uninstall_file "$TARGET_LAUNCHER"
+  preflight_uninstall_file "$TARGET_MANIFEST"
+  for relative in __init__.py cli.py core.py runner.py protocol.py installed_entry.py; do
+    preflight_uninstall_file "$TARGET_PACKAGE/$relative"
+  done
+}
+
 uninstall_helper() {
   local relative
+  preflight_uninstall
   remove_regular_root_file "$TARGET_LAUNCHER"
   remove_regular_root_file "$TARGET_MANIFEST"
   for relative in __init__.py cli.py core.py runner.py protocol.py installed_entry.py; do
@@ -248,6 +279,7 @@ show_status() {
 }
 
 require_root
+acquire_lock
 case "${1:-}" in
   install) install_helper ;;
   uninstall) uninstall_helper ;;

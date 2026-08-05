@@ -1,13 +1,220 @@
 #!/usr/bin/python3 -I
 from __future__ import annotations
 
+import hashlib
+import json
+import os
 from pathlib import Path
+import stat
 import sys
 
-INSTALL_ROOT = Path("/usr/local/libexec/pia-bazzite").resolve()
-sys.dont_write_bytecode = True
-sys.path.insert(0, str(INSTALL_ROOT))
+INSTALL_ROOT = Path('/usr/local/libexec/pia-bazzite')
+INSTALLED_LAUNCHER = INSTALL_ROOT / 'pia-bazzite-kill-switch-helper'
+INSTALLED_PACKAGE = INSTALL_ROOT / 'pia_bazzite_kill_switch_helper'
+MANIFEST = INSTALL_ROOT / 'kill-switch-helper-manifest.json'
+HELPER_STAGE = 2
+PROTOCOL_VERSION = 1
+SCHEMA_VERSION = 1
+INSTALL_FORMAT = 1
+EXIT_PRIVILEGE = 3
+EXIT_SAFETY = 6
+ACTIONS = {
+    'status', 'enable', 'set-interfaces', 'set-endpoints',
+    'add-endpoint', 'remove-endpoint', 'disable', 'emergency-reset',
+}
+EXPECTED_FILES = {
+    'pia-bazzite-kill-switch-helper': 0o755,
+    'pia_bazzite_kill_switch_helper/__init__.py': 0o644,
+    'pia_bazzite_kill_switch_helper/cli.py': 0o644,
+    'pia_bazzite_kill_switch_helper/core.py': 0o644,
+    'pia_bazzite_kill_switch_helper/runner.py': 0o644,
+    'pia_bazzite_kill_switch_helper/protocol.py': 0o644,
+    'pia_bazzite_kill_switch_helper/installed_entry.py': 0o644,
+}
 
-from pia_bazzite_kill_switch_helper.installed_entry import main
 
-raise SystemExit(main(sys.argv[1:], launcher_path=Path(sys.argv[0])))
+class BootstrapError(RuntimeError):
+    pass
+
+
+class AuthorizationError(RuntimeError):
+    pass
+
+
+def _infer_action(argv: list[str]) -> str:
+    for value in argv:
+        if value in ACTIONS:
+            return value
+        if not value.startswith('-'):
+            return 'unknown'
+    return 'unknown'
+
+
+def _emit_error(action: str, kind: str, message: str, code: int) -> int:
+    payload = {
+        'ok': False,
+        'schema_version': SCHEMA_VERSION,
+        'protocol_version': PROTOCOL_VERSION,
+        'helper_stage': HELPER_STAGE,
+        'action': action,
+        'error': kind,
+        'message': message,
+    }
+    print(json.dumps(payload, sort_keys=True), file=sys.stderr)
+    return code
+
+
+def _verify_authorization() -> int:
+    if os.geteuid() != 0:
+        raise AuthorizationError('Installed helper actions require root privileges via pkexec.')
+    raw_uid = os.environ.get('PKEXEC_UID')
+    if raw_uid is None or not raw_uid.isascii() or not raw_uid.isdecimal():
+        raise AuthorizationError('PKEXEC_UID is missing or invalid; direct sudo/root execution is refused.')
+    uid = int(raw_uid, 10)
+    if uid <= 0:
+        raise AuthorizationError('The pkexec caller must be a non-root user.')
+    return uid
+
+
+def _safe_directory(path: Path) -> Path:
+    try:
+        resolved = path.resolve(strict=True)
+        metadata = path.lstat()
+    except OSError as exc:
+        raise BootstrapError(f'Could not inspect directory {path}: {exc}') from exc
+    if path.is_symlink() and path != Path('/usr/local'):
+        raise BootstrapError(f'Refusing symbolic-link directory: {path}')
+    if not stat.S_ISDIR(metadata.st_mode):
+        raise BootstrapError(f'Expected a directory: {path}')
+    if metadata.st_uid != 0 or metadata.st_gid != 0:
+        raise BootstrapError(f'Directory is not owned by root:root: {path}')
+    if stat.S_IMODE(metadata.st_mode) & 0o022:
+        raise BootstrapError(f'Directory is group- or world-writable: {path}')
+    return resolved
+
+
+def _safe_file(path: Path, mode: int) -> Path:
+    try:
+        metadata = path.lstat()
+        resolved = path.resolve(strict=True)
+    except OSError as exc:
+        raise BootstrapError(f'Could not inspect installed file {path}: {exc}') from exc
+    if not stat.S_ISREG(metadata.st_mode):
+        raise BootstrapError(f'Installed path is not a regular file: {path}')
+    if metadata.st_uid != 0 or metadata.st_gid != 0:
+        raise BootstrapError(f'Installed file is not owned by root:root: {path}')
+    actual_mode = stat.S_IMODE(metadata.st_mode)
+    if actual_mode != mode:
+        raise BootstrapError(
+            f'Installed file has mode {actual_mode:04o}, expected {mode:04o}: {path}'
+        )
+    if metadata.st_nlink != 1:
+        raise BootstrapError(f'Installed file must have exactly one hard link: {path}')
+    return resolved
+
+
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open('rb') as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b''):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _verify_installation() -> None:
+    try:
+        actual_launcher = Path(sys.argv[0]).resolve(strict=True)
+        expected_launcher = INSTALLED_LAUNCHER.resolve(strict=True)
+    except OSError as exc:
+        raise BootstrapError(f'Could not resolve installed helper path: {exc}') from exc
+    if actual_launcher != expected_launcher:
+        raise BootstrapError(f'Helper must run from the fixed installed path {INSTALLED_LAUNCHER}.')
+
+    resolved_parent = _safe_directory(INSTALL_ROOT.parent)
+    resolved_root = _safe_directory(INSTALL_ROOT)
+    resolved_package = _safe_directory(INSTALLED_PACKAGE)
+    if resolved_root.parent != resolved_parent:
+        raise BootstrapError('Installed helper directory escaped /usr/local/libexec.')
+    if resolved_package != resolved_root / INSTALLED_PACKAGE.name:
+        raise BootstrapError('Installed package escaped the fixed helper directory.')
+
+    manifest_path = _safe_file(MANIFEST, 0o644)
+    if manifest_path != resolved_root / MANIFEST.name:
+        raise BootstrapError('Helper manifest escaped the fixed helper directory.')
+    try:
+        manifest = json.loads(MANIFEST.read_text(encoding='utf-8'))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise BootstrapError(f'Could not read helper manifest safely: {exc}') from exc
+    required_keys = {
+        'schema_version', 'install_format', 'helper_stage', 'protocol_version', 'files'
+    }
+    if not isinstance(manifest, dict) or set(manifest) != required_keys:
+        raise BootstrapError('Helper manifest shape is incomplete or unexpected.')
+    if manifest['schema_version'] != SCHEMA_VERSION:
+        raise BootstrapError('Unsupported helper manifest schema version.')
+    if manifest['install_format'] != INSTALL_FORMAT:
+        raise BootstrapError('Unsupported helper installation format.')
+    if manifest['helper_stage'] != HELPER_STAGE:
+        raise BootstrapError('Installed helper stage does not match the launcher.')
+    if manifest['protocol_version'] != PROTOCOL_VERSION:
+        raise BootstrapError('Installed helper protocol version does not match the launcher.')
+    files = manifest['files']
+    if not isinstance(files, dict) or set(files) != set(EXPECTED_FILES):
+        raise BootstrapError('Helper manifest file list is incomplete or unexpected.')
+
+    expected_package_entries = {
+        Path(name).name for name in EXPECTED_FILES if name.startswith('pia_bazzite_kill_switch_helper/')
+    }
+    try:
+        actual_package_entries = {item.name for item in INSTALLED_PACKAGE.iterdir()}
+    except OSError as exc:
+        raise BootstrapError(f'Could not inspect installed package contents: {exc}') from exc
+    if actual_package_entries != expected_package_entries:
+        raise BootstrapError('Installed package contains missing or unexpected files.')
+
+    for relative_name, expected_mode in EXPECTED_FILES.items():
+        candidate_path = INSTALL_ROOT / relative_name
+        candidate = _safe_file(candidate_path, expected_mode)
+        expected = resolved_root / relative_name
+        if candidate != expected:
+            raise BootstrapError(f'Installed file escaped the fixed helper directory: {relative_name}')
+        manifest_hash = files.get(relative_name)
+        if (
+            not isinstance(manifest_hash, str)
+            or len(manifest_hash) != 64
+            or any(character not in '0123456789abcdef' for character in manifest_hash)
+        ):
+            raise BootstrapError(f'Invalid manifest checksum for {relative_name}.')
+        if _sha256(candidate) != manifest_hash:
+            raise BootstrapError(f'Installed helper checksum mismatch: {relative_name}')
+
+
+def _sanitize_environment(uid: int) -> None:
+    os.environ.clear()
+    os.environ.update({
+        'PATH': '/usr/sbin:/usr/bin:/sbin:/bin',
+        'LC_ALL': 'C',
+        'PKEXEC_UID': str(uid),
+    })
+
+
+def main() -> int:
+    argv = list(sys.argv[1:])
+    action = _infer_action(argv)
+    try:
+        uid = _verify_authorization()
+        _verify_installation()
+        _sanitize_environment(uid)
+        sys.dont_write_bytecode = True
+        sys.path.insert(0, str(INSTALL_ROOT.resolve(strict=True)))
+        from pia_bazzite_kill_switch_helper.installed_entry import main as installed_main
+        return installed_main(argv, launcher_path=Path(sys.argv[0]))
+    except AuthorizationError as exc:
+        return _emit_error(action, 'privilege', str(exc), EXIT_PRIVILEGE)
+    except BootstrapError as exc:
+        return _emit_error(action, 'installation-boundary', str(exc), EXIT_SAFETY)
+    except Exception as exc:
+        return _emit_error(action, 'bootstrap-failure', f'Installed helper bootstrap failed: {exc}', EXIT_SAFETY)
+
+
+raise SystemExit(main())
