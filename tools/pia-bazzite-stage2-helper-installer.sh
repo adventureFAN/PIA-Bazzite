@@ -186,7 +186,7 @@ def sha256(path: Path) -> str:
 payload = {
     "schema_version": 1,
     "install_format": 1,
-    "helper_stage": 2,
+    "helper_stage": 5,
     "protocol_version": 1,
     "files": {name: sha256(root / name) for name in relative_files},
 }
@@ -274,7 +274,7 @@ uninstall_helper() {
   done
   /usr/bin/rmdir --ignore-fail-on-non-empty "$TARGET_PACKAGE" 2>/dev/null || true
   /usr/bin/rmdir --ignore-fail-on-non-empty "$TARGET_DIR" 2>/dev/null || true
-  printf 'Stage-2 helper installation is absent.\n'
+  printf 'Kill-switch helper installation is absent.\n'
 }
 
 show_status() {

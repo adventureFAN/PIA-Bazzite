@@ -16,7 +16,7 @@ SESSION_PROTOCOL_VERSION = 1
 SESSION_SCHEMA_VERSION = 1
 MAX_REQUESTS = 128
 MAX_LINE_BYTES = 32 * 1024
-IDLE_TIMEOUT_SECONDS = 300.0
+IDLE_TIMEOUT_SECONDS = 12 * 60 * 60.0
 EXIT_SESSION = 7
 
 _ACTION_FIELDS: Mapping[str, frozenset[str]] = {
@@ -107,11 +107,18 @@ def _parse_request(document: Any, previous_request_id: int) -> tuple[int, str, l
     return request_id, action, argv
 
 
-def _invoke_helper(argv: Sequence[str]) -> tuple[int, dict[str, Any]]:
+def _invoke_helper(
+    argv: Sequence[str],
+    *,
+    trusted_host: bool = False,
+) -> tuple[int, dict[str, Any]]:
     stdout = io.StringIO()
     stderr = io.StringIO()
     with redirect_stdout(stdout), redirect_stderr(stderr):
-        returncode = helper_main(list(argv))
+        if trusted_host:
+            returncode = helper_main(list(argv), trusted_host=True)
+        else:
+            returncode = helper_main(list(argv))
     output = stdout.getvalue() if returncode == 0 else stderr.getvalue()
     lines = [line for line in output.splitlines() if line.strip()]
     if len(lines) != 1:
@@ -139,7 +146,7 @@ def _read_line_with_timeout(timeout: float) -> bytes | None:
     return line
 
 
-def main() -> int:
+def main(*, trusted_host: bool = False) -> int:
     _emit(
         {
             "event": "ready",
@@ -176,7 +183,10 @@ def main() -> int:
                     }
                 )
                 return 0
-            returncode, payload = _invoke_helper(argv)
+            returncode, payload = _invoke_helper(
+                argv,
+                trusted_host=trusted_host,
+            )
             _emit(
                 {
                     "session_protocol_version": SESSION_PROTOCOL_VERSION,

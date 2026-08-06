@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import datetime
 from html import escape
 from pathlib import Path
@@ -48,13 +49,37 @@ from .credentials import CredentialStore, Credentials
 from .i18n import language, set_language, tr
 from .icons import status_dot_icon, status_icon, system_status_icon
 from .logging_utils import mask_ip_address, redact_secrets
+from .kill_switch_client import KillSwitchClient, KillSwitchClientError, KillSwitchStatus
+from .kill_switch_connection import (
+    ConnectionEvent,
+    ConnectionPhase,
+    ConnectionPlan,
+    IntentionalDisconnectError,
+    KillSwitchConnectionOrchestrator,
+    KillSwitchPreparationError,
+    PostConnectVerificationError,
+    VpnStartError,
+    read_wireguard_endpoint,
+)
+from .kill_switch_recovery import (
+    FirewallRoutePlan,
+    KillSwitchRecoveryOrchestrator,
+    PreparedServerSwitch,
+    ProtectedReconnectError,
+    ProtectedServerSwitchError,
+    RecoveryEvent,
+    RecoveryPhase,
+)
+from .kill_switch_runtime import KillSwitchRuntimeController
+from .kill_switch_session import KillSwitchSessionClient
 from .kill_switch_state import (
     KillSwitchViewState,
     sample_kill_switch_states,
 )
-from .kill_switch_runtime import KillSwitchRuntimeController
 from .kill_switch_widgets import KillSwitchStatusWidget
 from .models import PublicNetworkInfo, Region, SystemCheck
+from .network_paths import discover_physical_interface
+from .network_probes import NetworkProbeBaseline, NetworkProbeError
 from .pia_api import (
     create_wireguard_config,
     fetch_public_network_info,
@@ -77,6 +102,145 @@ from .workers import FunctionWorker
 FASTEST_ID = "__fastest__"
 COMPACT_SIZE = QSize(740, 510)
 LOG_SIZE = QSize(760, 780)
+
+
+_CONNECTION_EVENT_LOG_KEYS: dict[ConnectionPhase, str] = {
+    ConnectionPhase.PLAN_VALIDATED: "log.kill_switch.connection.plan_validated",
+    ConnectionPhase.KILL_SWITCH_BYPASSED: "log.kill_switch.connection.bypassed",
+    ConnectionPhase.AUTHORIZATION_STARTED: "log.kill_switch.connection.authorization",
+    ConnectionPhase.SESSION_AUTHORIZED: "log.kill_switch.connection.session_ready",
+    ConnectionPhase.FIREWALL_PREPARED: "log.kill_switch.connection.firewall_prepared",
+    ConnectionPhase.VPN_STARTING: "log.kill_switch.connection.vpn_starting",
+    ConnectionPhase.VPN_STARTED: "log.kill_switch.connection.vpn_started",
+    ConnectionPhase.POSTCHECK_STARTED: "log.kill_switch.connection.postcheck",
+    ConnectionPhase.CONNECTION_VERIFIED: "log.kill_switch.connection.verified",
+    ConnectionPhase.ROLLBACK_STARTED: "log.kill_switch.connection.rollback_started",
+    ConnectionPhase.ROLLBACK_COMPLETED: "log.kill_switch.connection.rollback_done",
+    ConnectionPhase.DISCONNECT_PREFLIGHT_STARTED: "log.kill_switch.disconnect.preflight",
+    ConnectionPhase.DISCONNECT_PREFLIGHT_VERIFIED: "log.kill_switch.disconnect.lock_verified",
+    ConnectionPhase.VPN_STOPPING: "log.kill_switch.disconnect.vpn_stopping",
+    ConnectionPhase.VPN_STOPPED: "log.kill_switch.disconnect.vpn_stopped",
+    ConnectionPhase.BLOCKED_PATH_CHECK_STARTED: "log.kill_switch.disconnect.probe_started",
+    ConnectionPhase.BLOCKED_PATH_VERIFIED: "log.kill_switch.disconnect.probe_verified",
+    ConnectionPhase.FIREWALL_RELEASING: "log.kill_switch.disconnect.releasing",
+    ConnectionPhase.FIREWALL_RELEASED: "log.kill_switch.disconnect.released",
+    ConnectionPhase.INTENTIONAL_DISCONNECT_VERIFIED: "log.kill_switch.disconnect.verified",
+}
+
+
+_RECOVERY_EVENT_LOG_KEYS: dict[RecoveryPhase, str] = {
+    RecoveryPhase.RECONNECT_PREFLIGHT_STARTED: "log.kill_switch.recovery.reconnect_preflight",
+    RecoveryPhase.RECONNECT_PREFLIGHT_VERIFIED: "log.kill_switch.recovery.reconnect_ready",
+    RecoveryPhase.SWITCH_PREFLIGHT_STARTED: "log.kill_switch.recovery.switch_preflight",
+    RecoveryPhase.SWITCH_PREFLIGHT_VERIFIED: "log.kill_switch.recovery.switch_ready",
+    RecoveryPhase.OLD_VPN_STOPPING: "log.kill_switch.recovery.old_vpn_stopping",
+    RecoveryPhase.OLD_VPN_STOPPED: "log.kill_switch.recovery.old_vpn_stopped",
+    RecoveryPhase.BLOCKED_PATH_CHECK_STARTED: "log.kill_switch.recovery.probe_started",
+    RecoveryPhase.BLOCKED_PATH_VERIFIED: "log.kill_switch.recovery.probe_verified",
+    RecoveryPhase.NEW_ROUTE_RESOLVING: "log.kill_switch.recovery.route_resolving",
+    RecoveryPhase.NEW_ROUTE_RESOLVED: "log.kill_switch.recovery.route_resolved",
+    RecoveryPhase.FIREWALL_RETARGET_STARTED: "log.kill_switch.recovery.firewall_updating",
+    RecoveryPhase.FIREWALL_RETARGETED: "log.kill_switch.recovery.firewall_updated",
+    RecoveryPhase.VPN_RECONNECTING: "log.kill_switch.recovery.reconnecting",
+    RecoveryPhase.VPN_RECONNECTED: "log.kill_switch.recovery.reconnected",
+    RecoveryPhase.NEW_VPN_STARTING: "log.kill_switch.recovery.new_vpn_starting",
+    RecoveryPhase.NEW_VPN_STARTED: "log.kill_switch.recovery.new_vpn_started",
+    RecoveryPhase.POSTCHECK_STARTED: "log.kill_switch.recovery.postcheck",
+    RecoveryPhase.RECONNECT_VERIFIED: "log.kill_switch.recovery.reconnect_verified",
+    RecoveryPhase.SWITCH_VERIFIED: "log.kill_switch.recovery.switch_verified",
+    RecoveryPhase.ROLLBACK_STARTED: "log.kill_switch.recovery.rollback_started",
+    RecoveryPhase.ROLLBACK_COMPLETED: "log.kill_switch.recovery.rollback_done",
+}
+
+
+@dataclass(frozen=True, slots=True)
+class _ProtectedConnectOutcome:
+    profile_uuid: str
+    session: KillSwitchSessionClient
+    status: KillSwitchStatus
+    baseline: NetworkProbeBaseline
+    route_plan: FirewallRoutePlan
+    events: tuple[ConnectionEvent, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class _ProtectedDisconnectOutcome:
+    session: KillSwitchSessionClient
+    status: KillSwitchStatus
+    events: tuple[ConnectionEvent, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class _ProtectedReconnectOutcome:
+    profile_uuid: str
+    session: KillSwitchSessionClient
+    status: KillSwitchStatus
+    route_plan: FirewallRoutePlan
+    events: tuple[RecoveryEvent, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class _ProtectedServerSwitchOutcome:
+    profile_uuid: str
+    session: KillSwitchSessionClient
+    status: KillSwitchStatus
+    route_plan: FirewallRoutePlan
+    events: tuple[RecoveryEvent, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class _KillSwitchAuthorizationOutcome:
+    session: KillSwitchSessionClient
+    status: KillSwitchStatus
+
+
+@dataclass(frozen=True, slots=True)
+class _KillSwitchStatusRecheckOutcome:
+    status: KillSwitchStatus
+
+
+class _KillSwitchJobFailure(RuntimeError):
+    def __init__(
+        self,
+        cause: BaseException,
+        *,
+        session: KillSwitchSessionClient | None = None,
+        status: KillSwitchStatus | None = None,
+        status_error: str = "",
+        baseline: NetworkProbeBaseline | None = None,
+        route_plan: FirewallRoutePlan | None = None,
+        events: tuple[ConnectionEvent, ...] = (),
+    ) -> None:
+        super().__init__(str(cause))
+        self.cause = cause
+        self.session = session
+        self.status = status
+        self.status_error = status_error.strip()
+        self.baseline = baseline
+        self.route_plan = route_plan
+        self.events = events
+
+
+class _KillSwitchRecoveryJobFailure(RuntimeError):
+    def __init__(
+        self,
+        cause: BaseException,
+        *,
+        session: KillSwitchSessionClient | None,
+        status: KillSwitchStatus | None,
+        status_error: str,
+        route_plan: FirewallRoutePlan | None,
+        baseline: NetworkProbeBaseline | None,
+        events: tuple[RecoveryEvent, ...],
+    ) -> None:
+        super().__init__(str(cause))
+        self.cause = cause
+        self.session = session
+        self.status = status
+        self.status_error = status_error.strip()
+        self.route_plan = route_plan
+        self.baseline = baseline
+        self.events = events
 
 
 class CredentialsDialog(QDialog):
@@ -262,9 +426,21 @@ class MainWindow(QMainWindow):
             self._stage4_preview_states[0]
         )
         self._last_kill_switch_mode: str | None = None
+        self._kill_switch_session: KillSwitchSessionClient | None = None
+        self._kill_switch_status: KillSwitchStatus | None = None
+        self._kill_switch_status_error = ""
+        self._kill_switch_probe_baseline: NetworkProbeBaseline | None = None
+        self._kill_switch_route_plan: FirewallRoutePlan | None = None
+        self._protected_reconnect_scheduled = False
+        self._region_selection_guard = False
+        runtime_status_reader = (
+            kill_switch_status_reader
+            if kill_switch_status_reader is not None
+            else self._read_cached_kill_switch_status
+        )
         self.kill_switch_runtime = KillSwitchRuntimeController(
             settings,
-            status_reader=kill_switch_status_reader,
+            status_reader=runtime_status_reader,
         )
 
         self.session_credentials: Credentials | None = None
@@ -392,6 +568,10 @@ class MainWindow(QMainWindow):
         self.tray_action.setCheckable(True)
         self.tray_action.toggled.connect(self._tray_setting_changed)
 
+        self.kill_switch_action = QAction(self)
+        self.kill_switch_action.setCheckable(True)
+        self.kill_switch_action.triggered.connect(self.change_kill_switch_enabled)
+
         self.about_action = QAction(self)
         self.about_action.setShortcut(QKeySequence("F1"))
         self.about_action.triggered.connect(self.show_about)
@@ -473,6 +653,8 @@ class MainWindow(QMainWindow):
         self.appearance_menu.addAction(self.system_theme_action)
         self.appearance_menu.addAction(self.light_theme_action)
         self.appearance_menu.addAction(self.dark_theme_action)
+
+        self.options_menu.addAction(self.kill_switch_action)
 
         self.quit_behavior_menu = self.options_menu.addMenu("")
         self.quit_behavior_menu.addAction(self.quit_ask_action)
@@ -681,6 +863,174 @@ class MainWindow(QMainWindow):
         self.kill_switch_value.hide()
         self.kill_switch_status_widget.show()
 
+    def _read_cached_kill_switch_status(self) -> KillSwitchStatus:
+        if self._kill_switch_status_error:
+            raise KillSwitchClientError(self._kill_switch_status_error)
+        if self._kill_switch_status is None:
+            raise KillSwitchClientError(
+                "No verified kill-switch helper status is available in this app session."
+            )
+        return self._kill_switch_status
+
+    def _set_cached_kill_switch_status(
+        self,
+        status: KillSwitchStatus | None,
+        *,
+        error: str = "",
+    ) -> None:
+        self._kill_switch_status = status
+        self._kill_switch_status_error = error.strip()
+
+    def _protected_reconnect_context_available(self) -> bool:
+        profile_uuid = str(
+            self.settings.value("connection/profile_uuid", "")
+        ).strip()
+        return (
+            bool(profile_uuid)
+            and self._kill_switch_probe_baseline is not None
+            and self._kill_switch_route_plan is not None
+        )
+
+    def _recheck_kill_switch_status(
+        self,
+        *,
+        after_absent: Callable[[], None] | None = None,
+        announce_absent: bool = True,
+    ) -> None:
+        """Reconcile stale GUI state after a documented external reset.
+
+        This is deliberately read-only: it asks the fixed installed helper for
+        the current production-table status and never enables, disables, or
+        removes firewall rules. A verified absent table clears only stale
+        in-memory recovery data from this GUI process.
+        """
+
+        if self._stage4_preview or self._connection_busy:
+            return
+        try:
+            connected = network_manager.is_connected()
+        except BaseException as exc:
+            self._show_error(exc)
+            return
+        if connected:
+            self._show_error(
+                AppError(
+                    "error.kill_switch_status_recheck.title",
+                    "error.kill_switch_status_recheck.connected_message",
+                    details=(
+                        "Read-only emergency-reset reconciliation is allowed only "
+                        "while the PIA WireGuard profile is disconnected."
+                    ),
+                )
+            )
+            return
+
+        self._connection_busy = True
+        self._update_controls()
+        self.log("info", "log.kill_switch.status_recheck.started")
+
+        def job() -> _KillSwitchStatusRecheckOutcome:
+            status = KillSwitchClient(timeout=120.0).status()
+            return _KillSwitchStatusRecheckOutcome(status=status)
+
+        def success(result: Any) -> None:
+            outcome = result
+            assert isinstance(outcome, _KillSwitchStatusRecheckOutcome)
+            self._connection_busy = False
+            self._set_cached_kill_switch_status(outcome.status)
+            if outcome.status.present:
+                self.log("warning", "log.kill_switch.status_recheck.present")
+                self._update_controls()
+                self.update_connection_status(force=True)
+                if after_absent is not None:
+                    error = AppError(
+                        "error.kill_switch_quit_blocked.title",
+                        "error.kill_switch_quit_blocked.message",
+                        details=(
+                            "The read-only helper status check verified that the "
+                            "production firewall table is still active."
+                        ),
+                    )
+                else:
+                    error = AppError(
+                        "error.kill_switch_status_recheck.title",
+                        "error.kill_switch_status_recheck.present_message",
+                        details=(
+                            "The fixed installed helper verified a present and "
+                            "structurally valid production firewall table."
+                        ),
+                    )
+                self._show_error(error)
+                return
+
+            self._kill_switch_probe_baseline = None
+            self._kill_switch_route_plan = None
+            self.settings.remove("connection/profile_uuid")
+            self.settings.sync()
+            self._close_kill_switch_session()
+            self.log("ok", "log.kill_switch.status_recheck.absent")
+            self._last_connected_state = False
+            self._update_controls()
+            self.update_connection_status(force=True)
+            if after_absent is not None:
+                after_absent()
+                return
+            self.refresh_public_info(show_errors=False)
+            if announce_absent:
+                QMessageBox.information(
+                    self,
+                    tr("kill_switch.status_recheck.absent_title"),
+                    tr("kill_switch.status_recheck.absent_message"),
+                )
+
+        def failure(error: BaseException) -> None:
+            self._connection_busy = False
+            self._set_cached_kill_switch_status(
+                self._kill_switch_status,
+                error=str(error),
+            )
+            self.log("error", "log.kill_switch.status_recheck.failed")
+            self._update_controls()
+            self.update_connection_status(force=True)
+            self._show_error(
+                AppError(
+                    "error.kill_switch_status_recheck.title",
+                    "error.kill_switch_status_recheck.message",
+                    details=f"{type(error).__name__}: {error}",
+                )
+            )
+
+        self._run_worker(job, on_success=success, on_failure=failure)
+
+    def _log_connection_events(
+        self,
+        events: tuple[ConnectionEvent, ...] | list[ConnectionEvent],
+    ) -> None:
+        for event in events:
+            key = _CONNECTION_EVENT_LOG_KEYS.get(event.phase)
+            if key is not None:
+                self.log(event.level, key)
+
+    def _log_recovery_events(
+        self,
+        events: tuple[RecoveryEvent, ...] | list[RecoveryEvent],
+    ) -> None:
+        for event in events:
+            key = _RECOVERY_EVENT_LOG_KEYS.get(event.phase)
+            if key is not None:
+                self.log(event.level, key)
+
+    def _close_kill_switch_session(self) -> None:
+        session = self._kill_switch_session
+        self._kill_switch_session = None
+        if session is None:
+            return
+        try:
+            session.close()
+        except Exception:
+            # Closing the restricted broker never changes the firewall table.
+            pass
+
     def _create_stage4_preview_menu(self) -> None:
         self.preview_menu = self.menuBar().addMenu("")
         self.preview_group = QActionGroup(self)
@@ -727,6 +1077,7 @@ class MainWindow(QMainWindow):
             self.ip_action,
             self.system_action,
             self.credentials_action,
+            self.kill_switch_action,
         ):
             action.setEnabled(False)
 
@@ -832,6 +1183,8 @@ class MainWindow(QMainWindow):
         self.quit_disconnect_action.setText(tr("menu.quit_disconnect"))
         self.quit_leave_action.setText(tr("menu.quit_leave"))
 
+        self.kill_switch_action.setText(tr("menu.kill_switch"))
+        self.kill_switch_action.setToolTip(tr("menu.kill_switch_tooltip"))
         self.credentials_action.setText(tr("menu.credentials"))
         self.live_log_action.setText(tr("menu.live_log"))
         self.tray_action.setText(tr("menu.tray"))
@@ -876,6 +1229,10 @@ class MainWindow(QMainWindow):
         self.light_theme_action.setChecked(theme == "light")
         self.dark_theme_action.setChecked(theme == "dark")
 
+        self.kill_switch_action.setChecked(
+            self.kill_switch_runtime.feature_enabled
+        )
+
         quit_behavior = str(self.settings.value("ui/quit_behavior", "ask"))
         self.quit_ask_action.setChecked(quit_behavior == "ask")
         self.quit_disconnect_action.setChecked(quit_behavior == "disconnect")
@@ -889,7 +1246,7 @@ class MainWindow(QMainWindow):
                 self._stage4_preview_states,
                 strict=True,
             ):
-                action.setText(tr(state.title_key))
+                action.setText(tr(state.title_key).replace("&", "&&"))
             self._set_stage4_preview_state(
                 self._stage4_preview_index,
                 log_transition=False,
@@ -924,6 +1281,313 @@ class MainWindow(QMainWindow):
         self.settings.setValue("ui/quit_behavior", behavior)
         self.settings.sync()
         self.retranslate()
+
+    def change_kill_switch_enabled(self, enabled: bool) -> None:
+        if self._stage4_preview:
+            self.kill_switch_action.setChecked(
+                self.kill_switch_runtime.feature_enabled
+            )
+            return
+        current = self.kill_switch_runtime.feature_enabled
+        if bool(enabled) == current:
+            return
+        if self._connection_busy:
+            self.kill_switch_action.setChecked(current)
+            return
+
+        try:
+            connected = network_manager.is_connected()
+        except BaseException as exc:
+            self.kill_switch_action.setChecked(current)
+            self._show_error(exc)
+            return
+        if connected:
+            self.kill_switch_action.setChecked(current)
+            QMessageBox.warning(
+                self,
+                tr("kill_switch.preference.connected_title"),
+                tr("kill_switch.preference.connected_message"),
+            )
+            return
+
+        if enabled:
+            self._authorize_kill_switch_preference()
+        else:
+            self._disable_kill_switch_preference()
+
+    def _authorize_kill_switch_preference(self) -> None:
+        self._connection_busy = True
+        self._update_controls()
+        self.kill_switch_action.setEnabled(False)
+        self.log("info", "log.kill_switch.preference.enabling")
+
+        def job() -> _KillSwitchAuthorizationOutcome:
+            session = KillSwitchSessionClient(timeout=120.0)
+            try:
+                session.open()
+                status = session.status()
+                if status.present or status.state != "disabled":
+                    raise AppError(
+                        "error.kill_switch_existing_lock.title",
+                        "error.kill_switch_existing_lock.message",
+                        details=(
+                            "A verified production kill-switch table already exists, "
+                            "but this Stage-5C app session has no matching probe baseline."
+                        ),
+                    )
+                return _KillSwitchAuthorizationOutcome(
+                    session=session,
+                    status=status,
+                )
+            except Exception as exc:
+                status: KillSwitchStatus | None = None
+                status_error = ""
+                try:
+                    if session.is_open:
+                        status = session.status()
+                except Exception as status_exc:
+                    status_error = str(status_exc)
+                raise _KillSwitchJobFailure(
+                    exc,
+                    session=session,
+                    status=status,
+                    status_error=status_error,
+                ) from exc
+
+        def success(result: Any) -> None:
+            outcome = result
+            assert isinstance(outcome, _KillSwitchAuthorizationOutcome)
+            self._kill_switch_session = outcome.session
+            self._set_cached_kill_switch_status(outcome.status)
+            self.kill_switch_runtime.set_feature_enabled(True)
+            self._connection_busy = False
+            self.kill_switch_action.setChecked(True)
+            self.kill_switch_action.setEnabled(True)
+            self.log("ok", "log.kill_switch.preference.enabled")
+            self._update_controls()
+            self.update_connection_status(force=True)
+
+        def failure(error: BaseException) -> None:
+            self._connection_busy = False
+            self.kill_switch_action.setEnabled(True)
+            if isinstance(error, _KillSwitchJobFailure):
+                if error.status is not None and error.status.present:
+                    self._kill_switch_session = error.session
+                    self._set_cached_kill_switch_status(
+                        error.status,
+                        error=error.status_error,
+                    )
+                    self.kill_switch_runtime.set_feature_enabled(True)
+                    self.kill_switch_action.setChecked(True)
+                else:
+                    if error.session is not None:
+                        try:
+                            error.session.close()
+                        except Exception:
+                            pass
+                    self._set_cached_kill_switch_status(None)
+                    self.kill_switch_runtime.set_feature_enabled(False)
+                    self.kill_switch_action.setChecked(False)
+                cause = error.cause
+            else:
+                cause = error
+                self.kill_switch_runtime.set_feature_enabled(False)
+                self.kill_switch_action.setChecked(False)
+            self.log("error", "log.kill_switch.preference.failed")
+            self._update_controls()
+            self.update_connection_status(force=True)
+            self._show_error(self._friendly_kill_switch_error(cause))
+
+        self._run_worker(job, on_success=success, on_failure=failure)
+
+    def _disable_kill_switch_preference(self) -> None:
+        self._connection_busy = True
+        self._update_controls()
+        self.kill_switch_action.setEnabled(False)
+        self.log("info", "log.kill_switch.preference.disabling")
+
+        baseline = self._kill_switch_probe_baseline
+        existing_session = self._kill_switch_session
+        profile_uuid = str(
+            self.settings.value("connection/profile_uuid", "")
+        ).strip()
+
+        def job() -> _ProtectedDisconnectOutcome:
+            session = existing_session or KillSwitchSessionClient(timeout=120.0)
+            events: list[ConnectionEvent] = []
+            try:
+                if existing_session is not None:
+                    try:
+                        session.open()
+                        status = session.status()
+                    except Exception:
+                        try:
+                            session.close()
+                        except Exception:
+                            pass
+                        session = KillSwitchSessionClient(timeout=120.0)
+                        session.open()
+                        status = session.status()
+                else:
+                    session.open()
+                    status = session.status()
+                if status.present:
+                    if baseline is None:
+                        raise AppError(
+                            "error.kill_switch_existing_lock.title",
+                            "error.kill_switch_existing_lock.message",
+                            details=(
+                                "The firewall is active, but the current app session "
+                                "has no pre-connection probe baseline."
+                            ),
+                        )
+                    orchestrator = KillSwitchConnectionOrchestrator(
+                        session=session,
+                        vpn_backend=network_manager,
+                        event_sink=events.append,
+                    )
+                    result = orchestrator.disconnect_intentionally(
+                        profile_uuid=profile_uuid,
+                        kill_switch_enabled=True,
+                        blocked_path_probe=baseline.ordinary_path_is_blocked,
+                    )
+                    if result.firewall_status is None:
+                        raise RuntimeError(
+                            "Protected release returned no verified helper status."
+                        )
+                    status = result.firewall_status
+                return _ProtectedDisconnectOutcome(
+                    session=session,
+                    status=status,
+                    events=tuple(events),
+                )
+            except Exception as exc:
+                status: KillSwitchStatus | None = None
+                status_error = ""
+                try:
+                    if session.is_open:
+                        status = session.status()
+                except Exception as status_exc:
+                    status_error = str(status_exc)
+                raise _KillSwitchJobFailure(
+                    exc,
+                    session=session,
+                    status=status,
+                    status_error=status_error,
+                    baseline=baseline,
+                    events=tuple(events),
+                ) from exc
+
+        def success(result: Any) -> None:
+            outcome = result
+            assert isinstance(outcome, _ProtectedDisconnectOutcome)
+            self._log_connection_events(outcome.events)
+            self._kill_switch_session = outcome.session
+            self._set_cached_kill_switch_status(outcome.status)
+            self.kill_switch_runtime.set_feature_enabled(False)
+            self._kill_switch_probe_baseline = None
+            self._kill_switch_route_plan = None
+            self._connection_busy = False
+            self.kill_switch_action.setChecked(False)
+            self.kill_switch_action.setEnabled(True)
+            self.log("ok", "log.kill_switch.preference.disabled")
+            self._close_kill_switch_session()
+            self._update_controls()
+            self.update_connection_status(force=True)
+            self.refresh_public_info(show_errors=False)
+
+        def failure(error: BaseException) -> None:
+            self._connection_busy = False
+            self.kill_switch_action.setEnabled(True)
+            self.kill_switch_action.setChecked(True)
+            self.kill_switch_runtime.set_feature_enabled(True)
+            if isinstance(error, _KillSwitchJobFailure):
+                self._log_connection_events(error.events)
+                self._kill_switch_probe_baseline = error.baseline
+                if error.status is not None:
+                    self._kill_switch_session = error.session
+                else:
+                    if error.session is not None:
+                        try:
+                            error.session.close()
+                        except Exception:
+                            pass
+                    self._kill_switch_session = None
+                self._set_cached_kill_switch_status(
+                    error.status,
+                    error=error.status_error,
+                )
+                cause = error.cause
+            else:
+                cause = error
+                self._set_cached_kill_switch_status(
+                    self._kill_switch_status,
+                    error=str(error),
+                )
+            self.log("error", "log.kill_switch.preference.failed")
+            self._update_controls()
+            self.update_connection_status(force=True)
+            self._show_error(self._friendly_kill_switch_error(cause))
+
+        self._run_worker(job, on_success=success, on_failure=failure)
+
+    @staticmethod
+    def _friendly_kill_switch_error(error: BaseException) -> AppError:
+        if isinstance(error, AppError):
+            return error
+        details = f"{type(error).__name__}: {error}"
+        if isinstance(error, NetworkProbeError):
+            return AppError(
+                "error.kill_switch_probe.title",
+                "error.kill_switch_probe.message",
+                details=details,
+            )
+        if isinstance(error, ProtectedReconnectError):
+            return AppError(
+                "error.kill_switch_recovery.title",
+                "error.kill_switch_recovery.message",
+                details=details,
+            )
+        if isinstance(error, ProtectedServerSwitchError):
+            return AppError(
+                "error.kill_switch_switch_failed.title",
+                "error.kill_switch_switch_failed.message",
+                details=details,
+            )
+        if isinstance(error, KillSwitchPreparationError):
+            return AppError(
+                "error.kill_switch_prepare.title",
+                "error.kill_switch_prepare.message",
+                details=details,
+            )
+        if isinstance(error, (VpnStartError, PostConnectVerificationError)):
+            retained = bool(getattr(error, "firewall_retained", False))
+            return AppError(
+                "error.kill_switch_blocking.title"
+                if retained
+                else "error.kill_switch_connection.title",
+                "error.kill_switch_blocking.message"
+                if retained
+                else "error.kill_switch_connection.message",
+                details=details,
+            )
+        if isinstance(error, IntentionalDisconnectError):
+            return AppError(
+                "error.kill_switch_blocking.title",
+                "error.kill_switch_blocking.message",
+                details=details,
+            )
+        if isinstance(error, KillSwitchClientError):
+            return AppError(
+                "error.kill_switch_authorization.title",
+                "error.kill_switch_authorization.message",
+                details=details,
+            )
+        return AppError(
+            "error.kill_switch_connection.title",
+            "error.kill_switch_connection.message",
+            details=details,
+        )
 
     # ------------------------------------------------------------------
     # Logging
@@ -1259,12 +1923,73 @@ class MainWindow(QMainWindow):
         self._update_controls()
 
     def _selection_changed(self, index: int) -> None:
-        if index < 0:
+        if index < 0 or self._region_selection_guard:
             return
         selected_id = str(self.region_combo.itemData(index))
         self.settings.setValue("connection/selected_region_id", selected_id)
         self.settings.sync()
         self._rebuild_tray_menu()
+
+        if self._connection_busy:
+            return
+        try:
+            connected = network_manager.is_connected()
+        except BaseException:
+            connected = False
+        region = self._selected_region()
+        if (
+            connected
+            and region is not None
+            and self._active_region_id
+            and region.region_id != self._active_region_id
+        ):
+            QTimer.singleShot(0, lambda selected=region: self.connect_region(selected))
+
+    def _restore_active_region_selection(self) -> None:
+        if not self._active_region_id:
+            return
+        self.settings.setValue(
+            "connection/selected_region_id",
+            self._active_region_id,
+        )
+        self.settings.sync()
+        index = self.region_combo.findData(self._active_region_id)
+        if index < 0:
+            active_region = self._region_by_id(self._active_region_id)
+            if active_region is None:
+                return
+            self.region_combo.addItem(
+                region_display_name(active_region, language()),
+                active_region.region_id,
+            )
+            index = self.region_combo.count() - 1
+        self._region_selection_guard = True
+        try:
+            self.region_combo.setCurrentIndex(index)
+        finally:
+            self._region_selection_guard = False
+        self._rebuild_tray_menu()
+
+    def _confirm_server_switch(self, region: Region) -> bool:
+        current = self._region_by_id(self._active_region_id)
+        current_name = (
+            localized_region_name(current, language())
+            if current is not None
+            else self._active_region_fallback or tr("common.unknown")
+        )
+        target_name = localized_region_name(region, language())
+        answer = QMessageBox.question(
+            self,
+            tr("server_switch.confirm_title"),
+            tr(
+                "server_switch.confirm_message",
+                current=current_name,
+                target=target_name,
+            ),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        return answer == QMessageBox.StandardButton.Yes
 
     def _selected_region(self) -> Region | None:
         if not self.regions:
@@ -1316,6 +2041,12 @@ class MainWindow(QMainWindow):
         if connected:
             self.disconnect()
         else:
+            if self._disconnected_kill_switch_may_block(connected=False):
+                if self._protected_reconnect_context_available():
+                    self._start_protected_reconnect(automatic=False)
+                else:
+                    self._recheck_kill_switch_status()
+                return
             region = self._selected_region()
             if region is None:
                 QMessageBox.information(
@@ -1351,6 +2082,41 @@ class MainWindow(QMainWindow):
             self._show_error(exc)
             return
 
+        kill_switch_enabled = self.kill_switch_runtime.feature_enabled
+        if was_connected:
+            if region.region_id == self._active_region_id:
+                self._restore_active_region_selection()
+                return
+            if not self._confirm_server_switch(region):
+                self._restore_active_region_selection()
+                return
+            if kill_switch_enabled:
+                self._switch_protected_region(
+                    region=region,
+                    credentials=credentials,
+                )
+                return
+        if kill_switch_enabled and self._disconnected_kill_switch_may_block(
+            connected=was_connected,
+        ):
+            if (
+                self._kill_switch_probe_baseline is None
+                or self._kill_switch_route_plan is None
+            ):
+                self._show_error(
+                    AppError(
+                        "error.kill_switch_existing_lock.title",
+                        "error.kill_switch_existing_lock.message",
+                        details=(
+                            "Protected reconnect requires the matching in-memory probe "
+                            "baseline and exact firewall route from this app session."
+                        ),
+                    )
+                )
+            else:
+                self._start_protected_reconnect(automatic=False)
+            return
+
         self._connection_busy = True
         self._update_controls()
         region_name = localized_region_name(region, language())
@@ -1365,15 +2131,107 @@ class MainWindow(QMainWindow):
         self.log("info", "log.connecting", region=region_name)
 
         config_path = cache_dir() / f"{network_manager.INTERFACE_NAME}.conf"
+        existing_session = self._kill_switch_session
 
-        def job() -> str:
+        def job() -> str | _ProtectedConnectOutcome:
+            if not kill_switch_enabled:
+                try:
+                    create_wireguard_config(
+                        config_path=config_path,
+                        credentials=credentials,
+                        region=region,
+                    )
+                    return network_manager.connect(config_path)
+                finally:
+                    try:
+                        config_path.unlink(missing_ok=True)
+                    except OSError:
+                        pass
+
+            events: list[ConnectionEvent] = []
+            baseline: NetworkProbeBaseline | None = None
+            route_plan: FirewallRoutePlan | None = None
+            session = existing_session or KillSwitchSessionClient(timeout=120.0)
             try:
+                baseline = NetworkProbeBaseline.capture()
                 create_wireguard_config(
                     config_path=config_path,
                     credentials=credentials,
                     region=region,
                 )
-                return network_manager.connect(config_path)
+                endpoint = read_wireguard_endpoint(config_path)
+                interface = discover_physical_interface(endpoint)
+                plan = ConnectionPlan.create(
+                    config_path=config_path,
+                    physical_interfaces=(interface,),
+                    endpoints=(endpoint,),
+                )
+                route_plan = FirewallRoutePlan.from_connection_plan(plan)
+
+                if existing_session is not None:
+                    try:
+                        session.open()
+                        session.status()
+                    except Exception:
+                        try:
+                            session.close()
+                        except Exception:
+                            pass
+                        session = KillSwitchSessionClient(timeout=120.0)
+
+                orchestrator = KillSwitchConnectionOrchestrator(
+                    session=session,
+                    vpn_backend=network_manager,
+                    event_sink=events.append,
+                )
+                result = orchestrator.connect(
+                    plan,
+                    kill_switch_enabled=True,
+                    vpn_connected_before=False,
+                )
+                if result.firewall_status is None:
+                    raise RuntimeError(
+                        "Protected connection returned no verified helper status."
+                    )
+                return _ProtectedConnectOutcome(
+                    profile_uuid=result.profile_uuid,
+                    session=session,
+                    status=result.firewall_status,
+                    baseline=baseline,
+                    route_plan=route_plan,
+                    events=tuple(events),
+                )
+            except Exception as exc:
+                status: KillSwitchStatus | None = None
+                status_error = ""
+                try:
+                    if session.is_open:
+                        status = session.status()
+                except Exception as status_exc:
+                    status_error = str(status_exc)
+                try:
+                    vpn_still_connected = network_manager.is_connected()
+                except Exception as vpn_status_exc:
+                    if not status_error:
+                        status_error = (
+                            "VPN state could not be verified after the failed protected "
+                            f"connection: {vpn_status_exc}"
+                        )
+                else:
+                    if vpn_still_connected and status is not None and status.present:
+                        status_error = (
+                            "The protected connection operation failed while NetworkManager "
+                            "still reports the VPN as connected."
+                        )
+                raise _KillSwitchJobFailure(
+                    exc,
+                    session=session,
+                    status=status,
+                    status_error=status_error,
+                    baseline=baseline,
+                    route_plan=route_plan,
+                    events=tuple(events),
+                ) from exc
             finally:
                 try:
                     config_path.unlink(missing_ok=True)
@@ -1382,7 +2240,22 @@ class MainWindow(QMainWindow):
 
         def success(result: Any) -> None:
             self._connection_busy = False
-            profile_uuid = str(result)
+            if isinstance(result, _ProtectedConnectOutcome):
+                profile_uuid = result.profile_uuid
+                self._log_connection_events(result.events)
+                if self._kill_switch_session is not result.session:
+                    self._close_kill_switch_session()
+                self._kill_switch_session = result.session
+                self._set_cached_kill_switch_status(result.status)
+                self._kill_switch_probe_baseline = result.baseline
+                self._kill_switch_route_plan = result.route_plan
+            else:
+                profile_uuid = str(result)
+                self._kill_switch_probe_baseline = None
+                self._kill_switch_route_plan = None
+                self._set_cached_kill_switch_status(None)
+                self._close_kill_switch_session()
+
             self._active_region_id = region.region_id
             self._active_region_fallback = region.name
             self.settings.setValue(
@@ -1402,6 +2275,8 @@ class MainWindow(QMainWindow):
                 profile_uuid,
             )
             self.settings.sync()
+            self._restore_active_region_selection()
+            self._last_connected_state = True
             self.log("ok", "log.connected", region=region_name)
             self._update_controls()
             self.update_connection_status(force=True)
@@ -1410,15 +2285,404 @@ class MainWindow(QMainWindow):
 
         def failure(error: BaseException) -> None:
             self._connection_busy = False
+            cause = error
+            if isinstance(error, _KillSwitchJobFailure):
+                cause = error.cause
+                self._log_connection_events(error.events)
+                self._kill_switch_probe_baseline = error.baseline
+                self._kill_switch_route_plan = error.route_plan
+                if error.status is not None and error.status.present:
+                    if self._kill_switch_session is not error.session:
+                        self._close_kill_switch_session()
+                    self._kill_switch_session = error.session
+                    self._set_cached_kill_switch_status(
+                        error.status,
+                        error=error.status_error,
+                    )
+                else:
+                    if error.session is not None:
+                        try:
+                            error.session.close()
+                        except Exception:
+                            pass
+                    self._kill_switch_session = None
+                    self._set_cached_kill_switch_status(
+                        error.status,
+                        error=error.status_error,
+                    )
             self.log("error", "activity.connection_failed")
             self._update_controls()
             self.update_connection_status(force=True)
+            self._show_error(self._friendly_kill_switch_error(cause))
+
+        self._run_worker(job, on_success=success, on_failure=failure)
+
+    def _schedule_protected_reconnect(self) -> None:
+        if self._protected_reconnect_scheduled or self._connection_busy:
+            return
+        if not self.kill_switch_runtime.feature_enabled:
+            return
+        self._protected_reconnect_scheduled = True
+        self.log("warning", "log.kill_switch.recovery.tunnel_lost")
+        QTimer.singleShot(
+            600,
+            lambda: self._start_protected_reconnect(automatic=True),
+        )
+
+    def _start_protected_reconnect(self, *, automatic: bool) -> None:
+        self._protected_reconnect_scheduled = False
+        if self._connection_busy or not self.kill_switch_runtime.feature_enabled:
+            return
+        try:
+            if network_manager.is_connected():
+                self._last_connected_state = True
+                self.update_connection_status(force=True)
+                return
+        except BaseException as exc:
+            self._show_error(exc)
+            return
+
+        baseline = self._kill_switch_probe_baseline
+        route_plan = self._kill_switch_route_plan
+        profile_uuid = str(
+            self.settings.value("connection/profile_uuid", "")
+        ).strip()
+        if baseline is None or route_plan is None or not profile_uuid:
+            error = AppError(
+                "error.kill_switch_existing_lock.title",
+                "error.kill_switch_existing_lock.message",
+                details=(
+                    "Protected reconnect requires the profile UUID, probe baseline, "
+                    "and exact firewall route from the current app session."
+                ),
+            )
+            if automatic:
+                self.log("error", "log.kill_switch.recovery.reconnect_unavailable")
             self._show_error(error)
+            return
+
+        self._connection_busy = True
+        self._update_controls()
+        self.log(
+            "info",
+            "log.kill_switch.recovery.automatic_reconnect"
+            if automatic
+            else "log.kill_switch.recovery.manual_reconnect",
+        )
+        existing_session = self._kill_switch_session
+
+        def job() -> _ProtectedReconnectOutcome:
+            events: list[RecoveryEvent] = []
+            session = existing_session or KillSwitchSessionClient(timeout=120.0)
+            try:
+                if existing_session is not None:
+                    try:
+                        session.open()
+                        session.status()
+                    except Exception:
+                        try:
+                            session.close()
+                        except Exception:
+                            pass
+                        session = KillSwitchSessionClient(timeout=120.0)
+
+                orchestrator = KillSwitchRecoveryOrchestrator(
+                    session=session,
+                    vpn_backend=network_manager,
+                    event_sink=events.append,
+                )
+                result = orchestrator.reconnect(
+                    profile_uuid=profile_uuid,
+                    route_plan=route_plan,
+                    blocked_path_probe=baseline.ordinary_path_is_blocked,
+                )
+                return _ProtectedReconnectOutcome(
+                    profile_uuid=result.profile_uuid,
+                    session=session,
+                    status=result.firewall_status,
+                    route_plan=result.route_plan,
+                    events=tuple(events),
+                )
+            except Exception as exc:
+                status: KillSwitchStatus | None = None
+                status_error = ""
+                try:
+                    if session.is_open:
+                        status = session.status()
+                except Exception as status_exc:
+                    status_error = str(status_exc)
+                try:
+                    still_connected = network_manager.is_connected()
+                except Exception as vpn_status_exc:
+                    if not status_error:
+                        status_error = str(vpn_status_exc)
+                else:
+                    if still_connected:
+                        status_error = (
+                            "Protected reconnect failed while NetworkManager still reports "
+                            "an active VPN; the combined protection state is unverified."
+                        )
+                raise _KillSwitchRecoveryJobFailure(
+                    exc,
+                    session=session,
+                    status=status,
+                    status_error=status_error,
+                    route_plan=route_plan,
+                    baseline=baseline,
+                    events=tuple(events),
+                ) from exc
+
+        def success(result: Any) -> None:
+            outcome = result
+            assert isinstance(outcome, _ProtectedReconnectOutcome)
+            self._connection_busy = False
+            self._log_recovery_events(outcome.events)
+            if self._kill_switch_session is not outcome.session:
+                self._close_kill_switch_session()
+            self._kill_switch_session = outcome.session
+            self._set_cached_kill_switch_status(outcome.status)
+            self._kill_switch_route_plan = outcome.route_plan
+            self._kill_switch_probe_baseline = baseline
+            self.settings.setValue(
+                "connection/profile_uuid",
+                outcome.profile_uuid,
+            )
+            self.settings.sync()
+            self._last_connected_state = True
+            self.log("ok", "log.kill_switch.recovery.reconnect_complete")
+            self._update_controls()
+            self.update_connection_status(force=True)
+            self.refresh_public_info(show_errors=False)
+            self._rebuild_tray_menu()
+
+        def failure(error: BaseException) -> None:
+            self._connection_busy = False
+            cause = error
+            if isinstance(error, _KillSwitchRecoveryJobFailure):
+                cause = error.cause
+                self._log_recovery_events(error.events)
+                self._kill_switch_probe_baseline = error.baseline
+                self._kill_switch_route_plan = error.route_plan
+                if self._kill_switch_session is not error.session:
+                    self._close_kill_switch_session()
+                self._kill_switch_session = error.session
+                self._set_cached_kill_switch_status(
+                    error.status,
+                    error=error.status_error,
+                )
+            self._last_connected_state = False
+            self.log("error", "log.kill_switch.recovery.reconnect_failed")
+            self._update_controls()
+            self.update_connection_status(force=True)
+            self._show_error(self._friendly_kill_switch_error(cause))
+
+        self._run_worker(job, on_success=success, on_failure=failure)
+
+    def _switch_protected_region(
+        self,
+        *,
+        region: Region,
+        credentials: Credentials,
+    ) -> None:
+        baseline = self._kill_switch_probe_baseline
+        current_route = self._kill_switch_route_plan
+        current_profile = str(
+            self.settings.value("connection/profile_uuid", "")
+        ).strip()
+        if baseline is None or current_route is None or not current_profile:
+            self._restore_active_region_selection()
+            self._show_error(
+                AppError(
+                    "error.kill_switch_existing_lock.title",
+                    "error.kill_switch_existing_lock.message",
+                    details=(
+                        "Protected server switching requires the current profile UUID, "
+                        "probe baseline, and exact firewall route from this app session."
+                    ),
+                )
+            )
+            return
+
+        self._connection_busy = True
+        self._update_controls()
+        region_name = localized_region_name(region, language())
+        self.log("info", "log.kill_switch.recovery.switch_requested", region=region_name)
+        config_path = cache_dir() / f"{network_manager.INTERFACE_NAME}.conf"
+        existing_session = self._kill_switch_session
+
+        def job() -> _ProtectedServerSwitchOutcome:
+            events: list[RecoveryEvent] = []
+            session = existing_session or KillSwitchSessionClient(timeout=120.0)
+            retained_route: FirewallRoutePlan | None = current_route
+            try:
+                create_wireguard_config(
+                    config_path=config_path,
+                    credentials=credentials,
+                    region=region,
+                )
+                candidate = PreparedServerSwitch.create(config_path=config_path)
+                if existing_session is not None:
+                    try:
+                        session.open()
+                        session.status()
+                    except Exception:
+                        try:
+                            session.close()
+                        except Exception:
+                            pass
+                        session = KillSwitchSessionClient(timeout=120.0)
+
+                orchestrator = KillSwitchRecoveryOrchestrator(
+                    session=session,
+                    vpn_backend=network_manager,
+                    event_sink=events.append,
+                )
+
+                def resolve_existing_physical_interface(endpoint: str) -> str:
+                    interface = discover_physical_interface(endpoint)
+                    if interface not in current_route.physical_interfaces:
+                        raise RuntimeError(
+                            "The physical network interface changed during the protected "
+                            "server switch; this transition is deferred to the dedicated "
+                            "Wi-Fi/LAN recovery stage."
+                        )
+                    return interface
+
+                result = orchestrator.switch_server(
+                    current_profile_uuid=current_profile,
+                    current_route_plan=current_route,
+                    candidate=candidate,
+                    blocked_path_probe=baseline.ordinary_path_is_blocked,
+                    physical_interface_resolver=resolve_existing_physical_interface,
+                )
+                retained_route = FirewallRoutePlan.from_connection_plan(
+                    result.connection_plan
+                )
+                return _ProtectedServerSwitchOutcome(
+                    profile_uuid=result.profile_uuid,
+                    session=session,
+                    status=result.firewall_status,
+                    route_plan=retained_route,
+                    events=tuple(events),
+                )
+            except Exception as exc:
+                if (
+                    isinstance(exc, ProtectedServerSwitchError)
+                    and exc.old_vpn_disconnected
+                ):
+                    retained_route = None
+                status: KillSwitchStatus | None = None
+                status_error = ""
+                try:
+                    if session.is_open:
+                        status = session.status()
+                except Exception as status_exc:
+                    status_error = str(status_exc)
+                try:
+                    still_connected = network_manager.is_connected()
+                except Exception as vpn_status_exc:
+                    if not status_error:
+                        status_error = str(vpn_status_exc)
+                else:
+                    if (
+                        still_connected
+                        and isinstance(exc, ProtectedServerSwitchError)
+                        and exc.old_vpn_disconnected
+                    ):
+                        status_error = (
+                            "Protected server switching failed while NetworkManager still "
+                            "reports a VPN connection; protection state requires attention."
+                        )
+                raise _KillSwitchRecoveryJobFailure(
+                    exc,
+                    session=session,
+                    status=status,
+                    status_error=status_error,
+                    route_plan=retained_route,
+                    baseline=baseline,
+                    events=tuple(events),
+                ) from exc
+            finally:
+                try:
+                    config_path.unlink(missing_ok=True)
+                except OSError:
+                    pass
+
+        def success(result: Any) -> None:
+            outcome = result
+            assert isinstance(outcome, _ProtectedServerSwitchOutcome)
+            self._connection_busy = False
+            self._log_recovery_events(outcome.events)
+            if self._kill_switch_session is not outcome.session:
+                self._close_kill_switch_session()
+            self._kill_switch_session = outcome.session
+            self._set_cached_kill_switch_status(outcome.status)
+            self._kill_switch_route_plan = outcome.route_plan
+            self._kill_switch_probe_baseline = baseline
+            self._active_region_id = region.region_id
+            self._active_region_fallback = region.name
+            self.settings.setValue("connection/selected_region_id", region.region_id)
+            self.settings.setValue("connection/active_region_id", region.region_id)
+            self.settings.setValue("connection/active_region_name", region.name)
+            self.settings.setValue("connection/profile_uuid", outcome.profile_uuid)
+            self.settings.sync()
+            self._restore_active_region_selection()
+            self._last_connected_state = True
+            self.log("ok", "log.kill_switch.recovery.switch_complete", region=region_name)
+            self._update_controls()
+            self.update_connection_status(force=True)
+            self.refresh_public_info(show_errors=False)
+            self._rebuild_tray_menu()
+
+        def failure(error: BaseException) -> None:
+            self._connection_busy = False
+            cause = error
+            if isinstance(error, _KillSwitchRecoveryJobFailure):
+                cause = error.cause
+                self._log_recovery_events(error.events)
+                self._kill_switch_probe_baseline = error.baseline
+                self._kill_switch_route_plan = error.route_plan
+                if self._kill_switch_session is not error.session:
+                    self._close_kill_switch_session()
+                self._kill_switch_session = error.session
+                self._set_cached_kill_switch_status(
+                    error.status,
+                    error=error.status_error,
+                )
+            try:
+                still_connected = network_manager.is_connected()
+            except BaseException:
+                still_connected = False
+            self._last_connected_state = still_connected
+            if still_connected:
+                self._restore_active_region_selection()
+            else:
+                self.settings.remove("connection/profile_uuid")
+                self.settings.sync()
+            self.log("error", "activity.switch_failed")
+            self._update_controls()
+            self.update_connection_status(force=True)
+            self._show_error(self._friendly_kill_switch_error(cause))
 
         self._run_worker(job, on_success=success, on_failure=failure)
 
     def disconnect(self, *, after_disconnect: Callable[[], None] | None = None) -> None:
         if self._connection_busy:
+            return
+
+        kill_switch_enabled = self.kill_switch_runtime.feature_enabled
+        baseline = self._kill_switch_probe_baseline
+        if kill_switch_enabled and baseline is None:
+            self._show_error(
+                AppError(
+                    "error.kill_switch_existing_lock.title",
+                    "error.kill_switch_existing_lock.message",
+                    details=(
+                        "Protected disconnect requires the pre-connection probe baseline "
+                        "from the current app session."
+                    ),
+                )
+            )
             return
 
         self._connection_busy = True
@@ -1429,14 +2693,84 @@ class MainWindow(QMainWindow):
         profile_uuid = str(
             self.settings.value("connection/profile_uuid", "")
         ).strip()
+        existing_session = self._kill_switch_session
 
-        def job() -> None:
-            network_manager.disconnect(profile_uuid)
+        def job() -> None | _ProtectedDisconnectOutcome:
+            if not kill_switch_enabled:
+                network_manager.disconnect(profile_uuid)
+                return None
 
-        def success(_: Any) -> None:
+            assert baseline is not None
+            events: list[ConnectionEvent] = []
+            session = existing_session or KillSwitchSessionClient(timeout=120.0)
+            try:
+                if existing_session is not None:
+                    try:
+                        session.open()
+                        session.status()
+                    except Exception:
+                        try:
+                            session.close()
+                        except Exception:
+                            pass
+                        session = KillSwitchSessionClient(timeout=120.0)
+
+                orchestrator = KillSwitchConnectionOrchestrator(
+                    session=session,
+                    vpn_backend=network_manager,
+                    event_sink=events.append,
+                )
+                result = orchestrator.disconnect_intentionally(
+                    profile_uuid=profile_uuid,
+                    kill_switch_enabled=True,
+                    blocked_path_probe=baseline.ordinary_path_is_blocked,
+                )
+                if result.firewall_status is None:
+                    raise RuntimeError(
+                        "Protected disconnect returned no verified helper status."
+                    )
+                return _ProtectedDisconnectOutcome(
+                    session=session,
+                    status=result.firewall_status,
+                    events=tuple(events),
+                )
+            except Exception as exc:
+                status: KillSwitchStatus | None = None
+                status_error = ""
+                try:
+                    if session.is_open:
+                        status = session.status()
+                except Exception as status_exc:
+                    status_error = str(status_exc)
+                raise _KillSwitchJobFailure(
+                    exc,
+                    session=session,
+                    status=status,
+                    status_error=status_error,
+                    baseline=baseline,
+                    events=tuple(events),
+                ) from exc
+
+        def success(result: Any) -> None:
             self._connection_busy = False
+            if isinstance(result, _ProtectedDisconnectOutcome):
+                self._log_connection_events(result.events)
+                if self._kill_switch_session is not result.session:
+                    self._close_kill_switch_session()
+                self._kill_switch_session = result.session
+                self._set_cached_kill_switch_status(result.status)
+                self._kill_switch_probe_baseline = None
+                self._kill_switch_route_plan = None
+                self._close_kill_switch_session()
+            else:
+                self._kill_switch_probe_baseline = None
+                self._kill_switch_route_plan = None
+                self._set_cached_kill_switch_status(None)
+                self._close_kill_switch_session()
+
             self.settings.remove("connection/profile_uuid")
             self.settings.sync()
+            self._last_connected_state = False
             self.log("ok", "log.disconnected")
             self._update_controls()
             self.update_connection_status(force=True)
@@ -1447,12 +2781,61 @@ class MainWindow(QMainWindow):
 
         def failure(error: BaseException) -> None:
             self._connection_busy = False
+            cause = error
+            if isinstance(error, _KillSwitchJobFailure):
+                cause = error.cause
+                self._log_connection_events(error.events)
+                self._kill_switch_probe_baseline = error.baseline
+                if self._kill_switch_session is not error.session:
+                    self._close_kill_switch_session()
+                self._kill_switch_session = error.session
+                self._set_cached_kill_switch_status(
+                    error.status,
+                    error=error.status_error,
+                )
+            try:
+                still_connected = network_manager.is_connected()
+            except BaseException:
+                still_connected = True
+            if not still_connected:
+                self.settings.remove("connection/profile_uuid")
+                self.settings.sync()
             self.log("error", "activity.disconnect_failed")
             self._update_controls()
             self.update_connection_status(force=True)
-            self._show_error(error)
+            self._show_error(self._friendly_kill_switch_error(cause))
 
         self._run_worker(job, on_success=success, on_failure=failure)
+
+    def _disconnected_kill_switch_may_block(
+        self,
+        *,
+        connected: bool | None = None,
+    ) -> bool:
+        if connected is None:
+            try:
+                connected = network_manager.is_connected()
+            except BaseException:
+                connected = False
+        if connected or not self.kill_switch_runtime.feature_enabled:
+            return False
+        return (
+            self._kill_switch_status is None
+            or self._kill_switch_status.present
+            or bool(self._kill_switch_status_error)
+        )
+
+    def _show_suppressed_public_info(self) -> None:
+        if self._kill_switch_view_state.mode.value == "blocking":
+            self.ip_value.setText("—")
+            self.country_value.setText("—")
+            self.ipv6_value.setText(tr("status.ipv6_blocked"))
+            self.dns_value.setText("—")
+        else:
+            self.ip_value.setText(tr("common.unknown"))
+            self.country_value.setText(tr("common.unknown"))
+            self.ipv6_value.setText(tr("common.unknown"))
+            self.dns_value.setText(tr("common.unknown"))
 
     def update_connection_status(self, force: bool = False) -> None:
         if self._stage4_preview:
@@ -1481,6 +2864,17 @@ class MainWindow(QMainWindow):
             log_transition=not self._connection_busy,
         )
 
+        disconnected_lock = self._disconnected_kill_switch_may_block(
+            connected=connected,
+        )
+        unexpected_protected_loss = (
+            changed
+            and previous is True
+            and not connected
+            and not self._connection_busy
+            and self.kill_switch_runtime.feature_enabled
+            and disconnected_lock
+        )
         if connected:
             self.ipv6_value.setText(
                 tr("status.ipv6_blocked")
@@ -1490,13 +2884,24 @@ class MainWindow(QMainWindow):
             self.dns_value.setText(tr("status.dns_pia"))
             self.connection_button.setText(tr("connection.disconnect"))
             self.toggle_vpn_action.setText(tr("connection.disconnect"))
+        elif disconnected_lock:
+            self._show_suppressed_public_info()
+            action_key = (
+                "connection.reconnect"
+                if self._protected_reconnect_context_available()
+                else "connection.recheck_protection"
+            )
+            self.connection_button.setText(tr(action_key))
+            self.toggle_vpn_action.setText(tr(action_key))
         else:
             self.ipv6_value.setText(tr("status.ipv6_normal"))
             self.dns_value.setText(tr("status.dns_system"))
             self.connection_button.setText(tr("connection.connect"))
             self.toggle_vpn_action.setText(tr("connection.connect"))
 
-        if self.public_info is None:
+        if disconnected_lock:
+            self._show_suppressed_public_info()
+        elif self.public_info is None:
             self.ip_value.setText(tr("common.checking"))
             self.country_value.setText(tr("common.checking"))
         else:
@@ -1505,7 +2910,9 @@ class MainWindow(QMainWindow):
                 public_country_name(self.public_info.country_code, language())
             )
 
-        if changed and previous is not None and not self._connection_busy:
+        if unexpected_protected_loss:
+            self._schedule_protected_reconnect()
+        elif changed and previous is not None and not self._connection_busy:
             self.log(
                 "info",
                 "log.external_connected" if connected else "log.external_disconnected",
@@ -1526,23 +2933,37 @@ class MainWindow(QMainWindow):
         except BaseException:
             connected = False
 
-        self.connection_button.setEnabled(
-            not busy and (has_regions or connected)
+        disconnected_lock = self._disconnected_kill_switch_may_block(
+            connected=connected,
         )
-        self.region_combo.setEnabled(not busy and has_regions)
-        self.search_edit.setEnabled(not busy and has_regions)
+        self.connection_button.setEnabled(
+            not busy and (has_regions or connected or disconnected_lock)
+        )
+        self.region_combo.setEnabled(
+            not busy and has_regions and (connected or not disconnected_lock)
+        )
+        self.search_edit.setEnabled(
+            not busy and has_regions and (connected or not disconnected_lock)
+        )
         self.reload_button.setEnabled(not busy)
         self.ping_button.setEnabled(not busy and has_regions)
-        self.ip_refresh_button.setEnabled(not self._public_info_busy)
+        self.ip_refresh_button.setEnabled(
+            not self._public_info_busy and not disconnected_lock
+        )
         self.reload_action.setEnabled(not busy)
         self.ping_action.setEnabled(not busy and has_regions)
         self.toggle_vpn_action.setEnabled(not self._connection_busy)
+        self.kill_switch_action.setEnabled(not busy and not connected)
 
     # ------------------------------------------------------------------
     # Public network information
     # ------------------------------------------------------------------
     def refresh_public_info(self, *, show_errors: bool) -> None:
         if self._public_info_busy:
+            return
+        if self._disconnected_kill_switch_may_block():
+            self._show_suppressed_public_info()
+            self.ip_refresh_button.setEnabled(False)
             return
         self._public_info_busy = True
         self.ip_value.setText(tr("common.checking"))
@@ -1552,10 +2973,13 @@ class MainWindow(QMainWindow):
         def success(result: Any) -> None:
             self._public_info_busy = False
             self.public_info = result
-            self.ip_value.setText(result.ip_address)
-            self.country_value.setText(
-                public_country_name(result.country_code, language())
-            )
+            if self._disconnected_kill_switch_may_block():
+                self._show_suppressed_public_info()
+            else:
+                self.ip_value.setText(result.ip_address)
+                self.country_value.setText(
+                    public_country_name(result.country_code, language())
+                )
             self.ip_refresh_button.setEnabled(True)
             self.log(
                 "info",
@@ -1566,8 +2990,11 @@ class MainWindow(QMainWindow):
 
         def failure(error: BaseException) -> None:
             self._public_info_busy = False
-            self.ip_value.setText(tr("status.ip_unavailable"))
-            self.country_value.setText(tr("common.unknown"))
+            if self._disconnected_kill_switch_may_block():
+                self._show_suppressed_public_info()
+            else:
+                self.ip_value.setText(tr("status.ip_unavailable"))
+                self.country_value.setText(tr("common.unknown"))
             self.ip_refresh_button.setEnabled(True)
             self.log("warning", "log.public_info_failed")
             if show_errors:
@@ -1611,6 +3038,9 @@ class MainWindow(QMainWindow):
             connected = network_manager.is_connected()
         except BaseException:
             connected = False
+        disconnected_lock = self._disconnected_kill_switch_may_block(
+            connected=connected,
+        )
 
         state = self._kill_switch_view_state
         status_action = QAction(tr(state.tray_status_key), menu)
@@ -1629,37 +3059,62 @@ class MainWindow(QMainWindow):
             )
             menu.addAction(disconnect_action)
         else:
-            last_region = self._last_selected_region()
             connect_action = QAction(menu)
-            if last_region is None:
-                connect_action.setText(tr("tray.locations_unavailable"))
-                connect_action.setEnabled(False)
-            else:
-                selected_id = str(
-                    self.settings.value(
-                        "connection/selected_region_id",
-                        FASTEST_ID,
+            if disconnected_lock:
+                reconnect_ready = self._protected_reconnect_context_available()
+                connect_action.setText(
+                    tr(
+                        "connection.reconnect"
+                        if reconnect_ready
+                        else "connection.recheck_protection"
                     )
                 )
-                if selected_id == FASTEST_ID:
-                    connect_action.setText(tr("tray.connect_fastest"))
-                else:
-                    connect_action.setText(
-                        tr(
-                            "tray.connect_last",
-                            region=localized_region_name(last_region, language()),
+                connect_action.setEnabled(not self._connection_busy)
+                if reconnect_ready:
+                    connect_action.triggered.connect(
+                        lambda checked=False: self._start_protected_reconnect(
+                            automatic=False
                         )
                     )
-                connect_action.setEnabled(not self._connection_busy)
-                connect_action.triggered.connect(
-                    lambda checked=False, region=last_region: self.connect_region(region)
-                )
+                else:
+                    connect_action.triggered.connect(
+                        lambda checked=False: self._recheck_kill_switch_status()
+                    )
+            else:
+                last_region = self._last_selected_region()
+                if last_region is None:
+                    connect_action.setText(tr("tray.locations_unavailable"))
+                    connect_action.setEnabled(False)
+                else:
+                    selected_id = str(
+                        self.settings.value(
+                            "connection/selected_region_id",
+                            FASTEST_ID,
+                        )
+                    )
+                    if selected_id == FASTEST_ID:
+                        connect_action.setText(tr("tray.connect_fastest"))
+                    else:
+                        connect_action.setText(
+                            tr(
+                                "tray.connect_last",
+                                region=localized_region_name(last_region, language()),
+                            )
+                        )
+                    connect_action.setEnabled(not self._connection_busy)
+                    connect_action.triggered.connect(
+                        lambda checked=False, region=last_region: self.connect_region(region)
+                    )
             menu.addAction(connect_action)
 
         locations_menu = menu.addMenu(
             tr("tray.switch_server") if connected else tr("tray.connect_with")
         )
-        locations_menu.setEnabled(bool(self.regions) and not self._connection_busy)
+        locations_menu.setEnabled(
+            bool(self.regions)
+            and not self._connection_busy
+            and not disconnected_lock
+        )
 
         fastest = self._selected_fastest_region()
         if fastest is not None:
@@ -1843,6 +3298,20 @@ class MainWindow(QMainWindow):
             connected = False
 
         if not connected:
+            kill_switch_may_be_active = (
+                self.kill_switch_runtime.feature_enabled
+                and (
+                    self._kill_switch_status is None
+                    or self._kill_switch_status.present
+                    or bool(self._kill_switch_status_error)
+                )
+            )
+            if kill_switch_may_be_active:
+                self._recheck_kill_switch_status(
+                    after_absent=self._final_quit,
+                    announce_absent=False,
+                )
+                return
             self._final_quit()
             return
 
@@ -1861,11 +3330,19 @@ class MainWindow(QMainWindow):
                 self.retranslate()
 
         if behavior == "leave":
+            if self.kill_switch_runtime.feature_enabled:
+                QMessageBox.warning(
+                    self,
+                    tr("kill_switch.quit_connected_title"),
+                    tr("kill_switch.quit_connected_message"),
+                )
+                return
             self._final_quit()
         elif behavior == "disconnect":
             self.disconnect(after_disconnect=self._final_quit)
 
     def _final_quit(self) -> None:
+        self._close_kill_switch_session()
         self._allow_close = True
         self.tray.hide()
         self.status_timer.stop()

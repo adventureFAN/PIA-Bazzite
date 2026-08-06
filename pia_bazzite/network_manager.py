@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 import shutil
 import subprocess
+import uuid
 
 from .app_errors import AppError
 
@@ -124,6 +125,45 @@ def _delete_existing_profiles() -> None:
         _delete_profile(identifier)
 
 
+def _normalize_profile_uuid(value: str) -> str:
+    if not isinstance(value, str) or value != value.strip() or not value:
+        raise NetworkManagerError(
+            "error.nm_profile.title",
+            "error.nm_profile.message",
+            details="NetworkManager profile UUID is missing or invalid.",
+        )
+    try:
+        return str(uuid.UUID(value))
+    except (ValueError, AttributeError) as exc:
+        raise NetworkManagerError(
+            "error.nm_profile.title",
+            "error.nm_profile.message",
+            details="NetworkManager profile UUID is missing or invalid.",
+        ) from exc
+
+
+def _profile_is_available(profile_uuid: str) -> bool:
+    completed = _run(
+        ["nmcli", "-t", "-f", "UUID,NAME,TYPE", "connection", "show"],
+        check=False,
+        timeout=15,
+    )
+    if completed.returncode != 0:
+        return False
+    for line in completed.stdout.splitlines():
+        parts = line.split(":", 2)
+        if len(parts) != 3:
+            continue
+        uuid_value, name, connection_type = parts
+        if (
+            uuid_value == profile_uuid
+            and name == CONNECTION_NAME
+            and connection_type == "wireguard"
+        ):
+            return True
+    return False
+
+
 def connect(config_path: Path) -> str:
     ensure_available()
     if not config_path.is_file():
@@ -170,6 +210,38 @@ def connect(config_path: Path) -> str:
         raise NetworkManagerError(
             "error.vpn_not_active.title",
             "error.vpn_not_active.message",
+        )
+    return state.uuid
+
+
+def reconnect(profile_uuid: str) -> str:
+    """Reactivate one existing fixed PIA WireGuard profile by UUID."""
+
+    ensure_available()
+    profile = _normalize_profile_uuid(profile_uuid)
+    state = connection_state()
+    if state.connected:
+        raise NetworkManagerError(
+            "error.nm_profile.title",
+            "error.nm_profile.message",
+            details="Protected reconnect requires the PIA VPN to be disconnected first.",
+        )
+    if not _profile_is_available(profile):
+        raise NetworkManagerError(
+            "error.nm_profile.title",
+            "error.nm_profile.message",
+            details="The expected inactive PIA WireGuard profile is unavailable.",
+        )
+    _run(
+        ["nmcli", "connection", "up", "uuid", profile],
+        timeout=60,
+    )
+    state = connection_state()
+    if not state.connected or state.uuid != profile:
+        raise NetworkManagerError(
+            "error.vpn_not_active.title",
+            "error.vpn_not_active.message",
+            details="NetworkManager did not reactivate the requested profile UUID.",
         )
     return state.uuid
 

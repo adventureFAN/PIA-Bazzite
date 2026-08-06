@@ -196,6 +196,23 @@ class CliTests(unittest.TestCase):
         self.assertEqual(payload["error"], "safety-boundary")
         runner_cls.assert_not_called()
 
+    @patch("helper.pia_bazzite_kill_switch_helper.cli.os.geteuid", return_value=0)
+    @patch("helper.pia_bazzite_kill_switch_helper.cli.NftRunner")
+    def test_verified_installed_boundary_may_use_host_namespace(self, runner_cls, geteuid) -> None:
+        runner = runner_cls.return_value
+        runner.table_exists.return_value = False
+        stdout = io.StringIO()
+        same_namespace = type("Stat", (), {"st_ino": 42})()
+        with patch(
+            "helper.pia_bazzite_kill_switch_helper.cli.os.stat",
+            return_value=same_namespace,
+        ), patch("sys.stdout", stdout):
+            code = cli.main(["status"], trusted_host=True)
+        self.assertEqual(code, 0)
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(payload["state"], "disabled")
+        self.assertEqual(payload["table"], "pia_bazzite_killswitch")
+
 
 if __name__ == "__main__":
     unittest.main()

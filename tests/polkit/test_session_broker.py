@@ -49,7 +49,7 @@ class SessionBrokerProtocolTests(unittest.TestCase):
             "ok": True,
             "schema_version": 1,
             "protocol_version": 1,
-            "helper_stage": 2,
+            "helper_stage": 5,
             "action": "status",
         }
         with patch.object(session_entry, "helper_main", side_effect=lambda argv: print(json.dumps(payload)) or 0):
@@ -60,7 +60,7 @@ class SessionBrokerProtocolTests(unittest.TestCase):
     def test_session_broker_has_fixed_limits_and_no_subprocess(self):
         source = (ROOT / "helper/pia_bazzite_kill_switch_helper/session_entry.py").read_text(encoding="utf-8")
         self.assertIn("MAX_REQUESTS = 128", source)
-        self.assertIn("IDLE_TIMEOUT_SECONDS = 300.0", source)
+        self.assertIn("IDLE_TIMEOUT_SECONDS = 12 * 60 * 60.0", source)
         self.assertIn("selectors", source)
         self.assertNotIn("subprocess", source)
         self.assertNotIn("shell=True", source)
@@ -76,6 +76,7 @@ class SessionInstallationStaticTests(unittest.TestCase):
         self.assertTrue(source.startswith("#!/usr/bin/python3 -I\n"))
         self.assertNotIn("subprocess", source)
         self.assertNotIn("shell=True", source)
+        self.assertIn("session_main(trusted_host=True)", source)
 
     def test_installer_manages_session_launcher_and_module_explicitly(self):
         source = INSTALLER.read_text(encoding="utf-8")

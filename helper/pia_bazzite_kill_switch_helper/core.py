@@ -6,19 +6,16 @@ import json
 import re
 from typing import Any, Iterable, Sequence
 
-HELPER_STAGE = 2
+HELPER_STAGE = 5
 SCHEMA_VERSION = 1
-# Stage 2D.2 keeps the host-namespace refusal and the historical test table
-# name, while exercising the intended production table *structure* inside
-# isolated namespaces.
-TABLE_NAME = "pia_bazzite_killswitch_helper_test"
+TABLE_NAME = "pia_bazzite_killswitch"
 CHAIN_NAME = "output"
 PHYSICAL_INTERFACE_SET = "physical_interfaces"
 ENDPOINT_SET_V4 = "allowed_endpoints_v4"
 ENDPOINT_SET_V6 = "allowed_endpoints_v6"
 VPN_INTERFACE = "piabazzite"
-TABLE_COMMENT = "PIA Bazzite session kill switch candidate v1"
-CHAIN_COMMENT = "PIA Bazzite session kill switch output candidate v1"
+TABLE_COMMENT = "PIA Bazzite session kill switch production v1"
+CHAIN_COMMENT = "PIA Bazzite session kill switch output production v1"
 
 MAX_INTERFACES = 8
 MAX_ENDPOINTS = 32
@@ -336,7 +333,7 @@ def parse_status_json(payload: str) -> dict[str, Any]:
 
     problems: list[str] = []
     if not table_found:
-        problems.append("candidate table is missing")
+        problems.append("kill-switch table is missing")
     if table_found and table_comment != TABLE_COMMENT:
         problems.append("table ownership marker is missing or incorrect")
 

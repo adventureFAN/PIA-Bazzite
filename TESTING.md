@@ -22,3 +22,14 @@ The static self-test does not contact PIA and does not change NetworkManager.
 18. On Bazzite, build with `./packaging/build-appimage-podman.sh`.
 19. Run `APPIMAGE_EXTRACT_AND_RUN=1 ./PIA-Bazzite-0.5.0-x86_64.AppImage --version`.
 20. Integrate the AppImage with Gear Lever and repeat the connection tests.
+
+
+## Stage 6C.2 emergency-reset reconciliation
+
+If a documented Emergency Reset is executed while the GUI is still open, the GUI
+never assumes that the firewall is gone. The main action changes to **Recheck
+protection status** when no matching in-memory reconnect baseline exists. The check
+uses the fixed installed helper in read-only `status` mode. Only a verified absent
+production table clears the stale error and permits normal exit. A present or
+unverifiable table remains fail-closed. The real GUI sentinel harness also refuses
+to start while another PIA Bazzite instance owns the application socket.

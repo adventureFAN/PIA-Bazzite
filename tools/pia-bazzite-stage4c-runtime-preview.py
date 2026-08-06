@@ -14,7 +14,7 @@ from PySide6.QtCore import QCoreApplication, QSettings, QSize, QTimer
 from PySide6.QtWidgets import QApplication
 
 from pia_bazzite.gui import MainWindow
-from pia_bazzite.i18n import set_language
+from pia_bazzite.i18n import set_language, tr
 from pia_bazzite.kill_switch_state import KillSwitchMode
 from pia_bazzite.theme import ThemeController
 
@@ -97,6 +97,13 @@ def main() -> int:
                 raise RuntimeError("Optional runtime states are incomplete or out of order.")
             if len(window.preview_actions) != 6:
                 raise RuntimeError("Preview menu does not expose all optional states.")
+            if window.kill_switch_action.isEnabled():
+                raise RuntimeError("Safe preview unexpectedly enabled the real Kill Switch action.")
+            if window.kill_switch_action.text() != tr("menu.kill_switch"):
+                raise RuntimeError("Kill Switch option was not translated in the real menu.")
+            expected_armed_menu = tr("kill_switch.state.armed").replace("&", "&&")
+            if window.preview_actions[1].text() != expected_armed_menu:
+                raise RuntimeError("Preview menu did not preserve the literal ampersand.")
             if window.size() != QSize(760, 780):
                 raise RuntimeError("Expanded preview window has an unexpected size.")
             QTimer.singleShot(0, app.quit)

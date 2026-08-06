@@ -91,3 +91,28 @@ and remains restricted to the existing validated helper actions.
 ```
 
 See `docs/kill-switch/KILL_SWITCH_SESSION_STAGE3C.md`.
+
+## Stage 5B production host boundary
+
+Stage 5B promotes the fixed helper protocol to helper stage 5 and the fixed
+production table `pia_bazzite_killswitch`. Direct project launchers still
+refuse the host network namespace. Host changes are accepted only through the
+root-owned installed entry points after their fixed paths, ownership, modes,
+manifest, checksums, package identity, and `pkexec` parent process have been
+verified.
+
+The helper remains deliberately narrow: it accepts only the documented JSON
+protocol actions, renders only the fixed nftables table, never invokes a shell,
+and cannot execute arbitrary nftables input. The first host activation is kept
+outside the normal GUI and is guarded by an independent systemd safety-reset
+timer.
+
+Run the non-privileged regression test first:
+
+```bash
+./tools/kill-switch-connection-stage5b-self-test.sh
+```
+
+The real host test is documented separately in
+`docs/kill-switch/KILL_SWITCH_CONNECTION_STAGE5B.md` and must be run only after
+the self-test succeeds.

@@ -90,7 +90,7 @@ def main() -> int:
                 raise RuntimeError("Live Log horizontal scrollbar is still enabled.")
             if window.ip_refresh_button.size() != QSize(28, 24):
                 raise RuntimeError("Public-IP refresh control is not compact.")
-            if window.size() != QSize(800, 780):
+            if window.size() != QSize(760, 780):
                 raise RuntimeError("Expanded preview window has an unexpected size.")
             QTimer.singleShot(0, app.quit)
         else:

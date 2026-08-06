@@ -206,7 +206,7 @@ def main(argv: Sequence[str] | None = None, *, launcher_path: Path | None = None
         verify_installation(actual_launcher)
         invoking_uid = verify_pkexec_authorization()
         sanitize_environment(invoking_uid)
-        return helper_main(raw_argv)
+        return helper_main(raw_argv, trusted_host=True)
     except AuthorizationBoundaryError as exc:
         return _emit_error(action, "privilege", str(exc), EXIT_PRIVILEGE)
     except InstallationBoundaryError as exc:

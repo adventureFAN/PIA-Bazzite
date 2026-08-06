@@ -38,7 +38,7 @@ def payload(
     present: bool = False,
     verified: bool = True,
     protocol_version: int = 1,
-    helper_stage: int = 2,
+    helper_stage: int = 5,
     problems: list[str] | None = None,
 ) -> dict[str, object]:
     document: dict[str, object] = {
@@ -54,7 +54,7 @@ def payload(
                 "state": state,
                 "present": present,
                 "verified": verified,
-                "table": "pia_bazzite_killswitch_helper_test",
+                "table": "pia_bazzite_killswitch",
                 "table_generation": 1,
                 "capabilities": [
                     "set-interfaces",

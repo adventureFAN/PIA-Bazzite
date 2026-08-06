@@ -52,14 +52,14 @@ def _parser() -> argparse.ArgumentParser:
     parser = JsonArgumentParser(
         prog="pia-bazzite-kill-switch-helper",
         description=(
-            "Restricted stage-2 candidate helper. It can manage only the fixed "
-            f"nftables table {TABLE_NAME!r} and still refuses the host network namespace."
+            "Restricted PIA Bazzite kill-switch helper. It can manage only the "
+            f"fixed nftables table {TABLE_NAME!r}."
         ),
     )
     parser.add_argument("--version", action="version", version=f"stage {HELPER_STAGE}")
     subparsers = parser.add_subparsers(dest="action", required=True)
 
-    subparsers.add_parser("status", help="Read and verify the fixed candidate table.")
+    subparsers.add_parser("status", help="Read and verify the fixed production table.")
 
     enable = subparsers.add_parser("enable", help="Atomically replace the fixed table.")
     enable.add_argument("--interface", action="append", required=True, dest="interfaces")
@@ -89,7 +89,7 @@ def _parser() -> argparse.ArgumentParser:
     )
     remove_endpoint.add_argument("--endpoint", required=True)
 
-    subparsers.add_parser("disable", help="Idempotently remove only the fixed candidate table.")
+    subparsers.add_parser("disable", help="Idempotently remove only the fixed production table.")
     subparsers.add_parser(
         "emergency-reset",
         help="Idempotently remove only the fixed candidate table (explicit recovery action).",
@@ -117,7 +117,7 @@ def _error(action: str | None, kind: str, message: str, code: int) -> int:
 def _require_root() -> None:
     if os.geteuid() != 0:
         raise PermissionError(
-            "Stage-2 candidate helper actions require root privileges inside the test namespace."
+            "Kill-switch helper actions require root privileges."
         )
 
 
@@ -131,8 +131,8 @@ def _require_isolated_network_namespace() -> None:
         ) from exc
     if current_namespace == initial_namespace:
         raise SafetyBoundaryError(
-            "Stage-2 candidate helper refuses the host network namespace. "
-            "Run it only through an isolated namespace test."
+            "The project helper refuses the host network namespace. "
+            "Host operation is allowed only through the verified installed launcher."
         )
 
 
@@ -176,7 +176,11 @@ def _status(runner: NftRunner, *, action: str) -> tuple[dict[str, object], int]:
     return payload, EXIT_VERIFY
 
 
-def main(argv: Sequence[str] | None = None) -> int:
+def main(
+    argv: Sequence[str] | None = None,
+    *,
+    trusted_host: bool = False,
+) -> int:
     raw_argv = list(sys.argv[1:] if argv is None else argv)
     request_context = infer_action(raw_argv)
     action: str | None = request_context.action
@@ -203,7 +207,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             raise ValidationError(f"Unsupported action: {args.action}")
 
         _require_root()
-        _require_isolated_network_namespace()
+        if not trusted_host:
+            _require_isolated_network_namespace()
         runner = NftRunner()
 
         if args.action == "status":

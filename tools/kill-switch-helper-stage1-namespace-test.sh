@@ -5,7 +5,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 HELPER="$ROOT/helper/pia-bazzite-kill-switch-helper"
 REPORT_DIR="$ROOT/test-results/kill-switch/stage1-helper"
 REPORT="${1:-$REPORT_DIR/pia-kill-switch-helper-stage1-namespace-test.txt}"
-TABLE="pia_bazzite_killswitch_helper_test"
+TABLE="pia_bazzite_killswitch"
 
 if [[ ${EUID:-$(id -u)} -ne 0 ]]; then
   if command -v sudo >/dev/null 2>&1; then

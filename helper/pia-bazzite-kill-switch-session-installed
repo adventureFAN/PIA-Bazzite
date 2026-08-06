@@ -12,7 +12,7 @@ INSTALL_ROOT = Path('/usr/local/libexec/pia-bazzite')
 INSTALLED_LAUNCHER = INSTALL_ROOT / 'pia-bazzite-kill-switch-session'
 INSTALLED_PACKAGE = INSTALL_ROOT / 'pia_bazzite_kill_switch_helper'
 MANIFEST = INSTALL_ROOT / 'kill-switch-helper-manifest.json'
-HELPER_STAGE = 2
+HELPER_STAGE = 5
 PROTOCOL_VERSION = 1
 SCHEMA_VERSION = 1
 INSTALL_FORMAT = 1
@@ -189,7 +189,7 @@ def main() -> int:
         sys.dont_write_bytecode = True
         sys.path.insert(0, str(INSTALL_ROOT.resolve(strict=True)))
         from pia_bazzite_kill_switch_helper.session_entry import main as session_main
-        return session_main()
+        return session_main(trusted_host=True)
     except AuthorizationError as exc:
         return _emit_error('privilege', str(exc), EXIT_PRIVILEGE)
     except BootstrapError as exc:

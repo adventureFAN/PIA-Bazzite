@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 INSTALLER="$ROOT/tools/pia-bazzite-stage2-helper-installer.sh"
 TARGET="/usr/local/libexec/pia-bazzite/pia-bazzite-kill-switch-helper"
-TABLE="pia_bazzite_killswitch_helper_test"
+TABLE="pia_bazzite_killswitch"
 LOCK="/run/lock/pia-bazzite-kill-switch-helper.lock"
 BRIDGE_SOURCE="$ROOT/tools/pia-bazzite-stage2-netns-polkit-bridge.py"
 BRIDGE_TARGET="/usr/local/libexec/pia-bazzite/pia-bazzite-stage2-netns-test-bridge"
@@ -117,7 +117,7 @@ p=json.load(sys.stdin)
 assert p["ok"] is True
 assert p["action"] == expected
 assert p["verified"] is True
-assert p["table"] == "pia_bazzite_killswitch_helper_test"
+assert p["table"] == "pia_bazzite_killswitch"
 assert p["table_generation"] == 1
 assert "set-interfaces" in p["capabilities"]
 assert "set-endpoints" in p["capabilities"]

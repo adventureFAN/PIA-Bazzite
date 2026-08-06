@@ -28,7 +28,7 @@ class InstalledBoundaryTests(unittest.TestCase):
                 {
                     "schema_version": 1,
                     "install_format": installed_entry.INSTALL_FORMAT,
-                    "helper_stage": 2,
+                    "helper_stage": 5,
                     "protocol_version": 1,
                     "files": {name: "a" * 64 for name in installed_entry.EXPECTED_FILES},
                 }
@@ -175,6 +175,17 @@ class InstalledFilesStaticTests(unittest.TestCase):
         self.assertIn("flock -n", text)
         self.assertIn("preflight_uninstall", text)
         self.assertLess(text.index("preflight_uninstall\n"), text.index('remove_regular_root_file "$TARGET_LAUNCHER"'))
+
+    def test_only_verified_installed_entry_enables_host_mode(self) -> None:
+        installed_source = (
+            PROJECT_ROOT / "helper/pia_bazzite_kill_switch_helper/installed_entry.py"
+        ).read_text(encoding="utf-8")
+        cli_source = (
+            PROJECT_ROOT / "helper/pia_bazzite_kill_switch_helper/cli.py"
+        ).read_text(encoding="utf-8")
+        self.assertIn("helper_main(raw_argv, trusted_host=True)", installed_source)
+        self.assertIn("trusted_host: bool = False", cli_source)
+        self.assertIn("if not trusted_host:", cli_source)
 
 
 if __name__ == "__main__":
