@@ -52,6 +52,7 @@ from .kill_switch_state import (
     KillSwitchViewState,
     sample_kill_switch_states,
 )
+from .kill_switch_runtime import KillSwitchRuntimeController
 from .kill_switch_widgets import KillSwitchStatusWidget
 from .models import PublicNetworkInfo, Region, SystemCheck
 from .pia_api import (
@@ -245,6 +246,7 @@ class MainWindow(QMainWindow):
         theme_controller: ThemeController,
         *,
         stage4_preview: bool = False,
+        kill_switch_status_reader: Callable[[], Any] | None = None,
     ) -> None:
         super().__init__()
         self.app = app
@@ -258,6 +260,11 @@ class MainWindow(QMainWindow):
         self._stage4_preview_index = 0
         self._kill_switch_view_state: KillSwitchViewState = (
             self._stage4_preview_states[0]
+        )
+        self._last_kill_switch_mode: str | None = None
+        self.kill_switch_runtime = KillSwitchRuntimeController(
+            settings,
+            status_reader=kill_switch_status_reader,
         )
 
         self.session_credentials: Credentials | None = None
@@ -292,6 +299,7 @@ class MainWindow(QMainWindow):
         self._create_main_ui()
         self._create_live_log()
         self._create_tray()
+        self._activate_kill_switch_status_ui()
         if self._stage4_preview:
             self._create_stage4_preview_menu()
 
@@ -664,6 +672,15 @@ class MainWindow(QMainWindow):
         self.tray.activated.connect(self._tray_activated)
         self._rebuild_tray_menu()
 
+    def _activate_kill_switch_status_ui(self) -> None:
+        """Use the compact state widget as the single status presentation."""
+
+        self.status_label.hide()
+        self.status_detail_label.hide()
+        self.kill_switch_caption.hide()
+        self.kill_switch_value.hide()
+        self.kill_switch_status_widget.show()
+
     def _create_stage4_preview_menu(self) -> None:
         self.preview_menu = self.menuBar().addMenu("")
         self.preview_group = QActionGroup(self)
@@ -687,12 +704,6 @@ class MainWindow(QMainWindow):
             self.preview_actions.append(action)
 
     def _prepare_stage4_preview(self) -> None:
-        self.status_label.hide()
-        self.status_detail_label.hide()
-        self.kill_switch_caption.hide()
-        self.kill_switch_value.hide()
-        self.kill_switch_status_widget.show()
-
         self.regions = []
         self.region_combo.blockSignals(True)
         self.region_combo.clear()
@@ -721,6 +732,26 @@ class MainWindow(QMainWindow):
 
         self._rebuild_tray_menu()
 
+    def _apply_kill_switch_view_state(
+        self,
+        state: KillSwitchViewState,
+        *,
+        log_transition: bool,
+    ) -> None:
+        previous_mode = self._last_kill_switch_mode
+        self._kill_switch_view_state = state
+        self._last_kill_switch_mode = state.mode.value
+        self.kill_switch_status_widget.set_state(state)
+        self.tray.setIcon(status_icon(state.icon_state))
+        self.tray.setToolTip(tr(state.tray_tooltip_key))
+
+        if (
+            log_transition
+            and previous_mode is not None
+            and previous_mode != state.mode.value
+        ):
+            self.log(state.log_level, state.log_key)
+
     def _set_stage4_preview_state(
         self,
         index: int,
@@ -732,11 +763,13 @@ class MainWindow(QMainWindow):
         if index < 0 or index >= len(self._stage4_preview_states):
             return
 
-        previous_mode = self._kill_switch_view_state.mode
         self._stage4_preview_index = index
-        self._kill_switch_view_state = self._stage4_preview_states[index]
-        state = self._kill_switch_view_state
-        self.kill_switch_status_widget.set_state(state)
+        state = self._stage4_preview_states[index]
+        previous_mode = self._kill_switch_view_state.mode
+        self._apply_kill_switch_view_state(
+            state,
+            log_transition=False,
+        )
 
         if hasattr(self, "preview_actions"):
             for action_index, action in enumerate(self.preview_actions):
@@ -744,13 +777,13 @@ class MainWindow(QMainWindow):
                 action.setChecked(action_index == index)
                 action.blockSignals(False)
 
-        if state.mode.value == "ready":
+        if state.mode.value in {"ready", "armed"}:
             self.ip_value.setText("198.51.100.24")
             self.country_value.setText("Germany" if language() == "en" else "Deutschland")
             self.ipv6_value.setText(tr("status.ipv6_normal"))
             self.dns_value.setText(tr("status.dns_system"))
             self.connection_button.setText(tr("connection.connect"))
-        elif state.mode.value == "active":
+        elif state.mode.value in {"vpn_only", "active"}:
             self.ip_value.setText("203.0.113.42")
             self.country_value.setText("Netherlands" if language() == "en" else "Niederlande")
             self.ipv6_value.setText(tr("status.ipv6_blocked"))
@@ -770,8 +803,6 @@ class MainWindow(QMainWindow):
             self.connection_button.setText(tr("connection.connect"))
 
         self.connection_button.setEnabled(False)
-        self.tray.setIcon(status_icon(state.icon_state))
-        self.tray.setToolTip(tr(state.tray_tooltip_key))
         self._rebuild_tray_menu()
 
         if log_transition and previous_mode != state.mode:
@@ -1435,54 +1466,35 @@ class MainWindow(QMainWindow):
         except BaseException:
             connected = False
 
-        changed = self._last_connected_state is None or connected != self._last_connected_state
+        changed = (
+            self._last_connected_state is None
+            or connected != self._last_connected_state
+        )
         previous = self._last_connected_state
         self._last_connected_state = connected
 
-        active_region = self._region_by_id(self._active_region_id)
-        if active_region is not None:
-            region_name = localized_region_name(active_region, language())
-        else:
-            region_name = self._active_region_fallback
+        state = self.kill_switch_runtime.view_state(
+            vpn_connected=connected,
+        )
+        self._apply_kill_switch_view_state(
+            state,
+            log_transition=not self._connection_busy,
+        )
 
         if connected:
-            self.status_label.setText(tr("status.connected"))
-            self.status_label.setStyleSheet(
-                "font-size: 20px; font-weight: 650; color: #2e7d32;"
-            )
-            if region_name:
-                self.status_detail_label.setText(
-                    tr("status.connected_detail", region=region_name)
-                )
-            else:
-                self.status_detail_label.setText(
-                    tr("status.connected_detail_generic")
-                )
             self.ipv6_value.setText(
                 tr("status.ipv6_blocked")
                 if network_manager.ipv6_blackhole_active()
                 else tr("status.ipv6_warning")
             )
             self.dns_value.setText(tr("status.dns_pia"))
-            self.kill_switch_value.setText(tr("status.no_kill_switch"))
             self.connection_button.setText(tr("connection.disconnect"))
             self.toggle_vpn_action.setText(tr("connection.disconnect"))
-            self.tray.setIcon(status_icon("connected"))
         else:
-            self.status_label.setText(tr("status.disconnected"))
-            self.status_label.setStyleSheet(
-                "font-size: 20px; font-weight: 650; color: #c62828;"
-            )
-            if not self._regions_busy and not self._connection_busy:
-                self.status_detail_label.setText(
-                    tr("status.disconnected_detail")
-                )
             self.ipv6_value.setText(tr("status.ipv6_normal"))
             self.dns_value.setText(tr("status.dns_system"))
-            self.kill_switch_value.setText(tr("status.no_kill_switch"))
             self.connection_button.setText(tr("connection.connect"))
             self.toggle_vpn_action.setText(tr("connection.connect"))
-            self.tray.setIcon(status_icon("disconnected"))
 
         if self.public_info is None:
             self.ip_value.setText(tr("common.checking"))
@@ -1600,25 +1612,9 @@ class MainWindow(QMainWindow):
         except BaseException:
             connected = False
 
-        active_region = self._region_by_id(self._active_region_id)
-        if active_region is not None:
-            active_name = localized_region_name(active_region, language())
-        else:
-            active_name = self._active_region_fallback
-
-        status_action = QAction(menu)
-        status_action.setIcon(
-            status_dot_icon("connected" if connected else "disconnected")
-        )
-        if connected:
-            status_action.setText(
-                tr(
-                    "tray.status_connected",
-                    region=active_name or tr("common.unknown"),
-                )
-            )
-        else:
-            status_action.setText(tr("tray.status_disconnected"))
+        state = self._kill_switch_view_state
+        status_action = QAction(tr(state.tray_status_key), menu)
+        status_action.setIcon(status_dot_icon(state.icon_state))
         # Indicator only: one colored icon, no duplicate text bullet, and no
         # click action.
         status_action.setEnabled(False)
@@ -1716,15 +1712,8 @@ class MainWindow(QMainWindow):
         self.tray.setContextMenu(menu)
         self._tray_menu = menu
 
-        if connected:
-            self.tray.setToolTip(
-                tr(
-                    "tray.connected",
-                    region=active_name or tr("common.unknown"),
-                )
-            )
-        else:
-            self.tray.setToolTip(tr("tray.disconnected"))
+        self.tray.setIcon(status_icon(state.icon_state))
+        self.tray.setToolTip(tr(state.tray_tooltip_key))
 
     def _tray_setting_changed(self, checked: bool) -> None:
         self.settings.setValue("ui/tray_enabled", checked)

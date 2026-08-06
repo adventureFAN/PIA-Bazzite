@@ -12,22 +12,53 @@ from pia_bazzite.kill_switch_state import (
 
 
 class KillSwitchStateTests(unittest.TestCase):
-    def test_ready_requires_no_vpn_and_no_table(self) -> None:
+    def test_ready_means_feature_off_vpn_off_and_no_table(self) -> None:
         state = derive_kill_switch_view_state(
             KillSwitchObservation.create(
+                feature_enabled=False,
                 vpn_connected=False,
                 table_present=False,
                 table_verified=False,
             )
         )
         self.assertIs(state.mode, KillSwitchMode.READY)
+        self.assertFalse(state.feature_enabled)
         self.assertFalse(state.firewall_active)
         self.assertFalse(state.protection_guaranteed)
         self.assertEqual(state.icon_state, "ready")
 
+    def test_armed_means_enabled_but_intentionally_disconnected(self) -> None:
+        state = derive_kill_switch_view_state(
+            KillSwitchObservation.create(
+                feature_enabled=True,
+                vpn_connected=False,
+                table_present=False,
+                table_verified=True,
+            )
+        )
+        self.assertIs(state.mode, KillSwitchMode.ARMED)
+        self.assertTrue(state.feature_enabled)
+        self.assertFalse(state.firewall_active)
+        self.assertFalse(state.protection_guaranteed)
+
+    def test_vpn_only_is_not_misreported_as_full_kill_switch_protection(self) -> None:
+        state = derive_kill_switch_view_state(
+            KillSwitchObservation.create(
+                feature_enabled=False,
+                vpn_connected=True,
+                table_present=False,
+                table_verified=False,
+            )
+        )
+        self.assertIs(state.mode, KillSwitchMode.VPN_ONLY)
+        self.assertFalse(state.feature_enabled)
+        self.assertFalse(state.protection_guaranteed)
+        self.assertEqual(state.icon_state, "vpn_only")
+
     def test_active_requires_connected_vpn_and_verified_table(self) -> None:
         state = derive_kill_switch_view_state(
             KillSwitchObservation.create(
+                feature_enabled=True,
                 vpn_connected=True,
                 table_present=True,
                 table_verified=True,
@@ -40,6 +71,7 @@ class KillSwitchStateTests(unittest.TestCase):
     def test_blocking_requires_verified_table_without_vpn(self) -> None:
         state = derive_kill_switch_view_state(
             KillSwitchObservation.create(
+                feature_enabled=True,
                 vpn_connected=False,
                 table_present=True,
                 table_verified=True,
@@ -49,9 +81,10 @@ class KillSwitchStateTests(unittest.TestCase):
         self.assertTrue(state.firewall_active)
         self.assertTrue(state.protection_guaranteed)
 
-    def test_connected_vpn_without_verified_table_is_error(self) -> None:
+    def test_connected_vpn_without_verified_table_is_error_when_enabled(self) -> None:
         state = derive_kill_switch_view_state(
             KillSwitchObservation.create(
+                feature_enabled=True,
                 vpn_connected=True,
                 table_present=False,
                 table_verified=False,
@@ -61,9 +94,22 @@ class KillSwitchStateTests(unittest.TestCase):
         self.assertTrue(state.diagnostic)
         self.assertFalse(state.protection_guaranteed)
 
+    def test_present_table_is_error_when_feature_is_disabled(self) -> None:
+        state = derive_kill_switch_view_state(
+            KillSwitchObservation.create(
+                feature_enabled=False,
+                vpn_connected=False,
+                table_present=True,
+                table_verified=True,
+            )
+        )
+        self.assertIs(state.mode, KillSwitchMode.ERROR)
+        self.assertIn("disabled", state.diagnostic)
+
     def test_present_unverified_table_is_error(self) -> None:
         state = derive_kill_switch_view_state(
             KillSwitchObservation.create(
+                feature_enabled=True,
                 vpn_connected=False,
                 table_present=True,
                 table_verified=False,
@@ -75,6 +121,7 @@ class KillSwitchStateTests(unittest.TestCase):
     def test_helper_problem_forces_error_even_when_table_looks_active(self) -> None:
         state = derive_kill_switch_view_state(
             KillSwitchObservation.create(
+                feature_enabled=True,
                 vpn_connected=True,
                 table_present=True,
                 table_verified=True,
@@ -87,6 +134,7 @@ class KillSwitchStateTests(unittest.TestCase):
     def test_explicit_error_is_not_hidden(self) -> None:
         state = derive_kill_switch_view_state(
             KillSwitchObservation.create(
+                feature_enabled=True,
                 vpn_connected=False,
                 table_present=False,
                 table_verified=False,
@@ -98,6 +146,7 @@ class KillSwitchStateTests(unittest.TestCase):
 
     def test_problem_strings_are_normalized(self) -> None:
         observation = KillSwitchObservation.create(
+            feature_enabled=True,
             vpn_connected=False,
             table_present=True,
             table_verified=True,
@@ -105,11 +154,13 @@ class KillSwitchStateTests(unittest.TestCase):
         )
         self.assertEqual(observation.problems, ("first", "second"))
 
-    def test_sample_states_cover_all_four_modes_in_order(self) -> None:
+    def test_sample_states_cover_all_optional_modes_in_order(self) -> None:
         self.assertEqual(
             tuple(state.mode for state in sample_kill_switch_states()),
             (
                 KillSwitchMode.READY,
+                KillSwitchMode.ARMED,
+                KillSwitchMode.VPN_ONLY,
                 KillSwitchMode.ACTIVE,
                 KillSwitchMode.BLOCKING,
                 KillSwitchMode.ERROR,
@@ -133,6 +184,14 @@ class KillSwitchColorTests(unittest.TestCase):
 
     def test_ready_is_dark_gray_on_light_background(self) -> None:
         self.assertEqual(status_color_hex("ready", dark_mode=False), "#546e7a")
+
+    def test_armed_remains_neutral(self) -> None:
+        self.assertEqual(status_color_hex("armed", dark_mode=True), "#cfd8dc")
+        self.assertEqual(status_color_hex("armed", dark_mode=False), "#78909c")
+
+    def test_vpn_only_has_distinct_blue_status(self) -> None:
+        self.assertEqual(status_color_hex("vpn_only", dark_mode=True), "#64b5f6")
+        self.assertEqual(status_color_hex("vpn_only", dark_mode=False), "#1565c0")
 
     def test_fixed_security_colors(self) -> None:
         self.assertEqual(status_color_hex("active", dark_mode=False), "#2e7d32")

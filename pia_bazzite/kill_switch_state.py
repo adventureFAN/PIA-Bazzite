@@ -6,9 +6,11 @@ from typing import Iterable
 
 
 class KillSwitchMode(str, Enum):
-    """User-visible session kill-switch states."""
+    """User-visible optional session kill-switch states."""
 
     READY = "ready"
+    ARMED = "armed"
+    VPN_ONLY = "vpn_only"
     ACTIVE = "active"
     BLOCKING = "blocking"
     ERROR = "error"
@@ -16,13 +18,14 @@ class KillSwitchMode(str, Enum):
 
 @dataclass(frozen=True, slots=True)
 class KillSwitchObservation:
-    """Small, immutable input used to derive one trustworthy UI state.
+    """Immutable input used to derive one trustworthy UI state.
 
-    This type intentionally contains no Qt, NetworkManager, Polkit, or nftables
-    code. Later integration stages can build an observation from the real
-    helper response while tests and preview tools can construct it directly.
+    ``feature_enabled`` is deliberately explicit. A connected VPN without a
+    firewall table is normal when the optional kill switch is disabled, but it
+    is a protection error when the user enabled the feature.
     """
 
+    feature_enabled: bool
     vpn_connected: bool
     table_present: bool
     table_verified: bool
@@ -36,6 +39,7 @@ class KillSwitchObservation:
         vpn_connected: bool,
         table_present: bool,
         table_verified: bool,
+        feature_enabled: bool = True,
         problems: Iterable[str] = (),
         error: str = "",
     ) -> "KillSwitchObservation":
@@ -43,6 +47,7 @@ class KillSwitchObservation:
             item.strip() for item in problems if item and item.strip()
         )
         return cls(
+            feature_enabled=bool(feature_enabled),
             vpn_connected=bool(vpn_connected),
             table_present=bool(table_present),
             table_verified=bool(table_verified),
@@ -62,6 +67,7 @@ class KillSwitchViewState:
     log_key: str
     log_level: str
     icon_state: str
+    feature_enabled: bool
     firewall_active: bool
     protection_guaranteed: bool
     diagnostic: str = ""
@@ -85,6 +91,30 @@ _STATE_METADATA: dict[KillSwitchMode, dict[str, object]] = {
         "log_key": "log.kill_switch.ready",
         "log_level": "info",
         "icon_state": "ready",
+        "firewall_active": False,
+        "protection_guaranteed": False,
+    },
+    KillSwitchMode.ARMED: {
+        "title_key": "kill_switch.state.armed",
+        "summary_key": "kill_switch.summary.armed",
+        "detail_key": "kill_switch.detail.armed",
+        "tray_status_key": "tray.kill_switch_status.armed",
+        "tray_tooltip_key": "tray.kill_switch_tooltip.armed",
+        "log_key": "log.kill_switch.armed",
+        "log_level": "info",
+        "icon_state": "armed",
+        "firewall_active": False,
+        "protection_guaranteed": False,
+    },
+    KillSwitchMode.VPN_ONLY: {
+        "title_key": "kill_switch.state.vpn_only",
+        "summary_key": "kill_switch.summary.vpn_only",
+        "detail_key": "kill_switch.detail.vpn_only",
+        "tray_status_key": "tray.kill_switch_status.vpn_only",
+        "tray_tooltip_key": "tray.kill_switch_tooltip.vpn_only",
+        "log_key": "log.kill_switch.vpn_only",
+        "log_level": "ok",
+        "icon_state": "vpn_only",
         "firewall_active": False,
         "protection_guaranteed": False,
     },
@@ -130,13 +160,7 @@ _STATE_METADATA: dict[KillSwitchMode, dict[str, object]] = {
 def derive_kill_switch_view_state(
     observation: KillSwitchObservation,
 ) -> KillSwitchViewState:
-    """Derive one of the four UI states without optimistic assumptions.
-
-    A connected VPN without a present, verified firewall table is an error.
-    A present table with any structural problem is also an error. The UI only
-    reports Active or Blocking when the same verified table guarantees the
-    protection in both cases.
-    """
+    """Derive a conservative state while respecting optional operation."""
 
     diagnostic = observation.error
     if not diagnostic and observation.problems:
@@ -144,6 +168,16 @@ def derive_kill_switch_view_state(
 
     if diagnostic:
         mode = KillSwitchMode.ERROR
+    elif not observation.feature_enabled:
+        if observation.table_present:
+            mode = KillSwitchMode.ERROR
+            diagnostic = (
+                "The kill-switch table is present although the feature is disabled."
+            )
+        elif observation.vpn_connected:
+            mode = KillSwitchMode.VPN_ONLY
+        else:
+            mode = KillSwitchMode.READY
     elif observation.table_present and not observation.table_verified:
         mode = KillSwitchMode.ERROR
         diagnostic = "The kill-switch table is present but not verified."
@@ -157,7 +191,7 @@ def derive_kill_switch_view_state(
         mode = KillSwitchMode.ERROR
         diagnostic = "The VPN is connected without a verified kill-switch table."
     else:
-        mode = KillSwitchMode.READY
+        mode = KillSwitchMode.ARMED
 
     metadata = _STATE_METADATA[mode]
     return KillSwitchViewState(
@@ -170,6 +204,7 @@ def derive_kill_switch_view_state(
         log_key=str(metadata["log_key"]),
         log_level=str(metadata["log_level"]),
         icon_state=str(metadata["icon_state"]),
+        feature_enabled=observation.feature_enabled,
         firewall_active=bool(metadata["firewall_active"]),
         protection_guaranteed=bool(metadata["protection_guaranteed"]),
         diagnostic=diagnostic,
@@ -182,6 +217,7 @@ def sample_kill_switch_states() -> tuple[KillSwitchViewState, ...]:
     return (
         derive_kill_switch_view_state(
             KillSwitchObservation.create(
+                feature_enabled=False,
                 vpn_connected=False,
                 table_present=False,
                 table_verified=False,
@@ -189,6 +225,23 @@ def sample_kill_switch_states() -> tuple[KillSwitchViewState, ...]:
         ),
         derive_kill_switch_view_state(
             KillSwitchObservation.create(
+                feature_enabled=True,
+                vpn_connected=False,
+                table_present=False,
+                table_verified=True,
+            )
+        ),
+        derive_kill_switch_view_state(
+            KillSwitchObservation.create(
+                feature_enabled=False,
+                vpn_connected=True,
+                table_present=False,
+                table_verified=False,
+            )
+        ),
+        derive_kill_switch_view_state(
+            KillSwitchObservation.create(
+                feature_enabled=True,
                 vpn_connected=True,
                 table_present=True,
                 table_verified=True,
@@ -196,6 +249,7 @@ def sample_kill_switch_states() -> tuple[KillSwitchViewState, ...]:
         ),
         derive_kill_switch_view_state(
             KillSwitchObservation.create(
+                feature_enabled=True,
                 vpn_connected=False,
                 table_present=True,
                 table_verified=True,
@@ -203,6 +257,7 @@ def sample_kill_switch_states() -> tuple[KillSwitchViewState, ...]:
         ),
         derive_kill_switch_view_state(
             KillSwitchObservation.create(
+                feature_enabled=True,
                 vpn_connected=True,
                 table_present=False,
                 table_verified=False,
@@ -224,6 +279,10 @@ def status_color_hex(state: str, *, dark_mode: bool) -> str:
     normalized = aliases.get(state, state)
     if normalized == "ready":
         return "#b0bec5" if dark_mode else "#546e7a"
+    if normalized == "armed":
+        return "#cfd8dc" if dark_mode else "#78909c"
+    if normalized == "vpn_only":
+        return "#64b5f6" if dark_mode else "#1565c0"
     return {
         "active": "#2e7d32",
         "blocking": "#ef6c00",

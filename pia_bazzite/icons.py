@@ -47,7 +47,8 @@ def status_icon(
     """Create the flat PIA shield used by the app and system tray.
 
     The stage-4 state colors are:
-    - neutral gray: ready / intentionally disconnected;
+    - neutral gray: ready / armed and intentionally disconnected;
+    - blue: VPN connected while the optional kill switch is disabled;
     - green: VPN connected and kill switch verified;
     - orange: VPN unavailable while the kill switch is blocking;
     - red: protection cannot be guaranteed.

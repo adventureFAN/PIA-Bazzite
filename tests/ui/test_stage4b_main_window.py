@@ -52,7 +52,7 @@ class Stage4BMainWindowStaticTests(unittest.TestCase):
     def test_state_model_has_separate_summary_and_detail_keys(self) -> None:
         source = STATE.read_text(encoding="utf-8")
         self.assertIn("summary_key: str", source)
-        for mode in ("ready", "active", "blocking", "error"):
+        for mode in ("ready", "armed", "vpn_only", "active", "blocking", "error"):
             self.assertIn(f'"summary_key": "kill_switch.summary.{mode}"', source)
 
     def test_german_labels_minimize_security_ambiguity(self) -> None:
@@ -61,10 +61,14 @@ class Stage4BMainWindowStaticTests(unittest.TestCase):
         )
         expected = {
             "kill_switch.state.ready": "Bereit",
+            "kill_switch.state.armed": "Kill Switch bereit",
+            "kill_switch.state.vpn_only": "VPN verbunden",
             "kill_switch.state.active": "Geschützt",
             "kill_switch.state.blocking": "Sicher blockiert",
             "kill_switch.state.error": "Schutzfehler",
             "kill_switch.summary.ready": "VPN getrennt · Normale Verbindung aktiv",
+            "kill_switch.summary.armed": "VPN getrennt · Schutz beim nächsten Verbinden",
+            "kill_switch.summary.vpn_only": "Kill Switch ausgeschaltet",
             "kill_switch.summary.active": "VPN verbunden · Kill Switch verifiziert",
             "kill_switch.summary.blocking": "VPN getrennt · Kein normaler Internetzugang",
             "kill_switch.summary.error": "Schutz nicht garantiert",
@@ -72,6 +76,8 @@ class Stage4BMainWindowStaticTests(unittest.TestCase):
         for key, value in expected.items():
             self.assertEqual(german[key], value)
         self.assertIn("echten öffentlichen IP", german["kill_switch.detail.ready"])
+        self.assertIn("nächsten VPN-Verbindungsaufbau", german["kill_switch.detail.armed"])
+        self.assertIn("echten öffentlichen IP", german["kill_switch.detail.vpn_only"])
         self.assertIn("außerhalb des VPN-Tunnels", german["kill_switch.detail.active"])
         self.assertIn("echte öffentliche IP", german["kill_switch.detail.blocking"])
         self.assertIn("nicht gestartet oder getrennt", german["kill_switch.detail.error"])
@@ -83,7 +89,7 @@ class Stage4BMainWindowStaticTests(unittest.TestCase):
             )
             messages = " ".join(
                 translations[f"log.kill_switch.{mode}"]
-                for mode in ("ready", "active", "blocking", "error")
+                for mode in ("ready", "armed", "vpn_only", "active", "blocking", "error")
             ).casefold()
             for forbidden in ("packet", "paket", "byte", "counter", "zähler"):
                 self.assertNotIn(forbidden, messages)
