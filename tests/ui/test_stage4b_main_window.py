@@ -60,8 +60,8 @@ class Stage4BMainWindowStaticTests(unittest.TestCase):
             (RESOURCE_DIR / "de.json").read_text(encoding="utf-8")
         )
         expected = {
-            "kill_switch.state.ready": "Bereit",
-            "kill_switch.state.armed": "Kill Switch bereit",
+            "kill_switch.state.ready": "VPN bereit",
+            "kill_switch.state.armed": "VPN & Kill Switch bereit",
             "kill_switch.state.vpn_only": "VPN verbunden",
             "kill_switch.state.active": "Geschützt",
             "kill_switch.state.blocking": "Sicher blockiert",
@@ -71,7 +71,7 @@ class Stage4BMainWindowStaticTests(unittest.TestCase):
             "kill_switch.summary.vpn_only": "Kill Switch ausgeschaltet",
             "kill_switch.summary.active": "VPN verbunden · Kill Switch verifiziert",
             "kill_switch.summary.blocking": "VPN getrennt · Kein normaler Internetzugang",
-            "kill_switch.summary.error": "Schutz nicht garantiert",
+            "kill_switch.summary.error": "Schutz nicht garantiert · Details im Live-Log",
         }
         for key, value in expected.items():
             self.assertEqual(german[key], value)

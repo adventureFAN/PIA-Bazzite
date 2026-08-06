@@ -65,7 +65,7 @@ class KillSwitchStatusWidget(QFrame):
         )
 
         text_layout = QVBoxLayout()
-        text_layout.setContentsMargins(0, 10, 0, 0)
+        text_layout.setContentsMargins(0, 14, 0, 0)
         text_layout.setSpacing(1)
         text_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
         text_layout.addWidget(self.title_label)

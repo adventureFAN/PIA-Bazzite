@@ -21,7 +21,7 @@ class Stage4B1PolishStaticTests(unittest.TestCase):
 
     def test_status_copy_is_tighter_and_aligned_with_icon_top(self) -> None:
         source = WIDGETS.read_text(encoding="utf-8")
-        self.assertIn("text_layout.setContentsMargins(0, 10, 0, 0)", source)
+        self.assertIn("text_layout.setContentsMargins(0, 14, 0, 0)", source)
         self.assertIn("text_layout.setSpacing(1)", source)
         self.assertIn("text_layout.setAlignment(Qt.AlignmentFlag.AlignTop)", source)
         self.assertGreaterEqual(
@@ -37,8 +37,8 @@ class Stage4B1PolishStaticTests(unittest.TestCase):
 
     def test_main_window_width_is_reduced_without_height_change(self) -> None:
         source = GUI.read_text(encoding="utf-8")
-        self.assertIn("COMPACT_SIZE = QSize(760, 510)", source)
-        self.assertIn("LOG_SIZE = QSize(800, 780)", source)
+        self.assertIn("COMPACT_SIZE = QSize(740, 510)", source)
+        self.assertIn("LOG_SIZE = QSize(760, 780)", source)
 
     def test_live_log_wraps_and_has_no_horizontal_scrollbar(self) -> None:
         source = GUI.read_text(encoding="utf-8")
@@ -58,7 +58,7 @@ class Stage4B1PolishStaticTests(unittest.TestCase):
             "self.log_view.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)",
             source,
         )
-        self.assertIn("buttons.setContentsMargins(0, 2, 0, 0)", source)
+        self.assertIn("buttons.setContentsMargins(0, 8, 0, 0)", source)
 
     def test_runtime_smoke_probe_checks_polished_controls(self) -> None:
         source = PREVIEW.read_text(encoding="utf-8")

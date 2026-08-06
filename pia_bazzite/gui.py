@@ -75,8 +75,8 @@ from .workers import FunctionWorker
 
 
 FASTEST_ID = "__fastest__"
-COMPACT_SIZE = QSize(760, 510)
-LOG_SIZE = QSize(800, 780)
+COMPACT_SIZE = QSize(740, 510)
+LOG_SIZE = QSize(760, 780)
 
 
 class CredentialsDialog(QDialog):
@@ -650,7 +650,7 @@ class MainWindow(QMainWindow):
         self.log_clear_button.clicked.connect(self.log_view.clear)
 
         buttons = QHBoxLayout()
-        buttons.setContentsMargins(0, 2, 0, 0)
+        buttons.setContentsMargins(0, 8, 0, 0)
         buttons.addStretch()
         buttons.addWidget(self.log_copy_button)
         buttons.addWidget(self.log_save_button)

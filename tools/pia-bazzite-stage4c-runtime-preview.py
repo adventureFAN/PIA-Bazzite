@@ -10,7 +10,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from PySide6.QtCore import QCoreApplication, QSettings, QTimer
+from PySide6.QtCore import QCoreApplication, QSettings, QSize, QTimer
 from PySide6.QtWidgets import QApplication
 
 from pia_bazzite.gui import MainWindow
@@ -79,18 +79,26 @@ def main() -> int:
                 KillSwitchMode.BLOCKING,
                 KillSwitchMode.ERROR,
             )
+            window.show()
+            app.processEvents()
             observed = []
             for index, state in enumerate(window._stage4_preview_states):
                 window._set_stage4_preview_state(index, log_transition=True)
+                app.processEvents()
                 observed.append(state.mode)
                 if window.kill_switch_status_widget.state is not state:
                     raise RuntimeError("Main window did not apply the runtime state.")
                 if not window.tray.toolTip():
                     raise RuntimeError("Tray tooltip was not updated from the runtime state.")
+                tooltip = window.kill_switch_status_widget.toolTip()
+                if "\n" not in tooltip:
+                    raise RuntimeError("A status tooltip has no deliberate line break.")
             if tuple(observed) != expected:
                 raise RuntimeError("Optional runtime states are incomplete or out of order.")
             if len(window.preview_actions) != 6:
                 raise RuntimeError("Preview menu does not expose all optional states.")
+            if window.size() != QSize(760, 780):
+                raise RuntimeError("Expanded preview window has an unexpected size.")
             QTimer.singleShot(0, app.quit)
         else:
             window.show()
