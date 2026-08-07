@@ -152,6 +152,8 @@ class KillSwitchStatus:
     capabilities: tuple[str, ...]
     problems: tuple[str, ...]
     payload: Mapping[str, Any]
+    physical_interfaces: tuple[str, ...] = ()
+    endpoints: tuple[str, ...] = ()
 
     @property
     def protection_active(self) -> bool:
@@ -176,6 +178,8 @@ class KillSwitchStatus:
         table_generation = _require_int(payload, "table_generation")
         capabilities = _require_string_tuple(payload, "capabilities")
         problems = _require_string_tuple(payload, "problems")
+        physical_interfaces = _require_string_tuple(payload, "physical_interfaces")
+        endpoints = _require_string_tuple(payload, "endpoints")
 
         if not verified:
             raise InvalidHelperResponseError(
@@ -193,6 +197,18 @@ class KillSwitchStatus:
             raise InvalidHelperResponseError(
                 "Helper claims a disabled state while its table is present."
             )
+        if "inspect-route" not in capabilities:
+            raise InvalidHelperResponseError(
+                "Helper response does not support exact firewall-route inspection."
+            )
+        if state == "active" and (not physical_interfaces or not endpoints):
+            raise InvalidHelperResponseError(
+                "Active helper response does not contain exact firewall allowlists."
+            )
+        if state == "disabled" and (physical_interfaces or endpoints):
+            raise InvalidHelperResponseError(
+                "Disabled helper response unexpectedly contains firewall allowlists."
+            )
 
         return cls(
             action=response.action,
@@ -204,6 +220,8 @@ class KillSwitchStatus:
             capabilities=capabilities,
             problems=problems,
             payload=dict(payload),
+            physical_interfaces=physical_interfaces,
+            endpoints=endpoints,
         )
 
 

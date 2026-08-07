@@ -50,12 +50,15 @@ def status_payload(action: str, state: str = "active") -> dict[str, object]:
         "table": "pia_bazzite_killswitch",
         "table_generation": 1,
         "capabilities": [
+            "inspect-route",
             "set-interfaces",
             "set-endpoints",
             "add-endpoint",
             "remove-endpoint",
         ],
         "problems": [],
+        "physical_interfaces": ["wlo1"] if present else [],
+        "endpoints": ["198.51.100.1:1337"] if present else [],
     }
 
 
@@ -65,9 +68,11 @@ class FakeSessionTransport:
         self.session_pid = 4815
         self.starts = 0
         self.requests = 0
+        self.alive = False
 
     def start(self, arguments, *, timeout, environment):
         self.starts += 1
+        self.alive = True
         return {
             "event": "ready",
             "session_protocol_version": 1,
@@ -96,7 +101,11 @@ class FakeSessionTransport:
             "payload": payload,
         }
 
+    def is_alive(self):
+        return self.alive
+
     def close(self, *, timeout):
+        self.alive = False
         return None
 
 

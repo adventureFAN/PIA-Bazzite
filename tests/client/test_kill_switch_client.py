@@ -57,12 +57,15 @@ def payload(
                 "table": "pia_bazzite_killswitch",
                 "table_generation": 1,
                 "capabilities": [
+                    "inspect-route",
                     "set-interfaces",
                     "set-endpoints",
                     "add-endpoint",
                     "remove-endpoint",
                 ],
                 "problems": [] if problems is None else problems,
+                "physical_interfaces": ["wlo1"] if state == "active" else [],
+                "endpoints": ["198.51.100.1:1337"] if state == "active" else [],
             }
         )
     else:
@@ -117,6 +120,8 @@ class KillSwitchClientTests(unittest.TestCase):
 
         self.assertEqual(status.state, "disabled")
         self.assertFalse(status.protection_active)
+        self.assertEqual(status.physical_interfaces, ())
+        self.assertEqual(status.endpoints, ())
         arguments, timeout, environment = runner.calls[0]
         self.assertEqual(
             arguments,
@@ -220,6 +225,15 @@ class KillSwitchClientTests(unittest.TestCase):
             with self.assertRaises(HelperNotInstalledError):
                 client.status()
         self.assertEqual(runner.calls, [])
+
+    def test_missing_exact_route_capability_or_fields_is_rejected(self):
+        missing_capability = payload(action="status")
+        missing_capability["capabilities"] = ["set-interfaces"]
+        missing_fields = payload(action="status")
+        del missing_fields["physical_interfaces"]
+        for document in (missing_capability, missing_fields):
+            with self.subTest(document=document), self.assertRaises(InvalidHelperResponseError):
+                self.make_client(ProcessResult(0, json.dumps(document), "")).status()
 
     def test_malformed_mixed_or_non_object_output_is_rejected(self):
         cases = [

@@ -33,6 +33,12 @@ def state_dir() -> Path:
     return path
 
 
+def crash_recovery_path() -> Path:
+    """Fixed private path for the fail-closed crash-recovery hint."""
+
+    return state_dir() / "kill-switch-crash-recovery-v1.json"
+
+
 def create_settings() -> QSettings:
     settings = QSettings(str(config_dir() / "settings.ini"), QSettings.Format.IniFormat)
     if not settings.value("migration/v04_complete", False, type=bool):

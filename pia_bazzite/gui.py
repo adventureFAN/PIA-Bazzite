@@ -50,6 +50,14 @@ from .i18n import language, set_language, tr
 from .icons import status_dot_icon, status_icon, system_status_icon
 from .logging_utils import mask_ip_address, redact_secrets
 from .kill_switch_client import KillSwitchClient, KillSwitchClientError, KillSwitchStatus
+from .kill_switch_crash_state import (
+    CrashRecoveryDecision,
+    CrashRecoveryDisposition,
+    CrashRecoveryJournal,
+    CrashRecoveryStateError,
+    CrashRecoveryStore,
+    CrashRecoveryVerifier,
+)
 from .kill_switch_connection import (
     ConnectionEvent,
     ConnectionPhase,
@@ -93,7 +101,7 @@ from .region_names import (
     region_display_name,
     search_haystack,
 )
-from .settings import bool_value, cache_dir, state_dir
+from .settings import bool_value, cache_dir, crash_recovery_path, state_dir
 from .system_checks import required_checks_pass, run_system_checks
 from .theme import ThemeController
 from .workers import FunctionWorker
@@ -197,6 +205,13 @@ class _KillSwitchAuthorizationOutcome:
 @dataclass(frozen=True, slots=True)
 class _KillSwitchStatusRecheckOutcome:
     status: KillSwitchStatus
+
+
+@dataclass(frozen=True, slots=True)
+class _KillSwitchStartupRecoveryOutcome:
+    session: KillSwitchSessionClient
+    status: KillSwitchStatus
+    decision: CrashRecoveryDecision
 
 
 class _KillSwitchJobFailure(RuntimeError):
@@ -431,6 +446,9 @@ class MainWindow(QMainWindow):
         self._kill_switch_status_error = ""
         self._kill_switch_probe_baseline: NetworkProbeBaseline | None = None
         self._kill_switch_route_plan: FirewallRoutePlan | None = None
+        self._crash_recovery_journal = CrashRecoveryJournal(
+            CrashRecoveryStore(crash_recovery_path())
+        )
         self._protected_reconnect_scheduled = False
         self._region_selection_guard = False
         runtime_status_reader = (
@@ -508,6 +526,7 @@ class MainWindow(QMainWindow):
         self.log("info", "log.started", version=__version__)
 
         QTimer.singleShot(0, self._first_start)
+        QTimer.singleShot(75, self._reconcile_kill_switch_startup)
         QTimer.singleShot(150, self.refresh_regions)
         QTimer.singleShot(500, lambda: self.refresh_public_info(show_errors=False))
 
@@ -881,6 +900,43 @@ class MainWindow(QMainWindow):
         self._kill_switch_status = status
         self._kill_switch_status_error = error.strip()
 
+    def _save_connected_crash_recovery_record(
+        self,
+        *,
+        profile_uuid: str,
+        route_plan: FirewallRoutePlan,
+    ) -> None:
+        self._crash_recovery_journal.save_connected(
+            profile_uuid=profile_uuid,
+            route_plan=route_plan,
+        )
+
+    def _save_blocking_crash_recovery_record(
+        self,
+        *,
+        profile_uuid: str,
+        route_plan: FirewallRoutePlan,
+    ) -> None:
+        self._crash_recovery_journal.save_blocking(
+            profile_uuid=profile_uuid,
+            route_plan=route_plan,
+        )
+
+    def _clear_crash_recovery_record(self) -> None:
+        self._crash_recovery_journal.clear()
+
+    def _clear_crash_recovery_record_after_safe_release(self) -> None:
+        try:
+            self._crash_recovery_journal.store.discard_untrusted_after_verified_release()
+        except CrashRecoveryStateError as exc:
+            self.log(
+                "warning",
+                "log.kill_switch.crash_record.clear_failed",
+                details=str(exc),
+            )
+        else:
+            self.log("ok", "log.kill_switch.crash_record.cleared")
+
     def _protected_reconnect_context_available(self) -> bool:
         profile_uuid = str(
             self.settings.value("connection/profile_uuid", "")
@@ -890,6 +946,269 @@ class MainWindow(QMainWindow):
             and self._kill_switch_probe_baseline is not None
             and self._kill_switch_route_plan is not None
         )
+
+    def _startup_kill_switch_reconciliation_required(self) -> bool:
+        record_path = crash_recovery_path()
+        return self.kill_switch_runtime.feature_enabled or (
+            record_path.exists() or record_path.is_symlink()
+        )
+
+    def _reconcile_kill_switch_startup(self) -> None:
+        """Adopt only an exactly verified crash-surviving protection state.
+
+        The startup check is automatic when the Kill Switch preference is
+        enabled or a recovery record exists.  It is read-only with respect to
+        NetworkManager and nftables: the only permitted mutation is clearing an
+        already validated stale record after the helper proves the table absent,
+        or rotating the record session ID after exact adoption.
+        """
+
+        if (
+            self._stage4_preview
+            or self._connection_busy
+            or not self._startup_kill_switch_reconciliation_required()
+        ):
+            return
+
+        self._connection_busy = True
+        self._update_controls()
+        self.log("info", "log.kill_switch.startup_recovery.started")
+
+        def job() -> _KillSwitchStartupRecoveryOutcome:
+            session = KillSwitchSessionClient(timeout=120.0)
+            status: KillSwitchStatus | None = None
+            try:
+                record = self._crash_recovery_journal.store.load()
+                session.open()
+                first_status = session.status()
+                first_network = network_manager.connection_state()
+                second_status = session.status()
+                second_network = network_manager.connection_state()
+                status = second_status
+                if first_status != second_status or first_network != second_network:
+                    raise CrashRecoveryStateError(
+                        "The host protection state changed during startup reconciliation."
+                    )
+
+                decision = CrashRecoveryVerifier().evaluate(
+                    record=record,
+                    helper_status=second_status,
+                    vpn_connected=second_network.connected,
+                    active_profile_uuid=second_network.uuid,
+                )
+                # The worker deliberately leaves the recovery record unchanged.
+                # A rotated session ID is the externally observable takeover
+                # commit, so it may only be written after the GUI thread has
+                # retained this exact authenticated helper session.
+                return _KillSwitchStartupRecoveryOutcome(
+                    session=session,
+                    status=second_status,
+                    decision=decision,
+                )
+            except Exception as exc:
+                status_error = ""
+                try:
+                    if session.is_open:
+                        status = session.status()
+                except Exception as status_exc:
+                    status_error = str(status_exc)
+                raise _KillSwitchJobFailure(
+                    exc,
+                    session=session,
+                    status=status,
+                    status_error=status_error,
+                ) from exc
+
+        def success(result: Any) -> None:
+            outcome = result
+            assert isinstance(outcome, _KillSwitchStartupRecoveryOutcome)
+            decision = outcome.decision
+            self._connection_busy = False
+
+            if not outcome.session.is_open:
+                self._set_cached_kill_switch_status(
+                    outcome.status,
+                    error=(
+                        "The authenticated helper session ended before startup "
+                        "reconciliation could be committed."
+                    ),
+                )
+                self.log(
+                    "error",
+                    "log.kill_switch.startup_recovery.failed",
+                    details=(
+                        "CrashRecoveryStateError: The authenticated helper "
+                        "session was not open at the takeover commit boundary."
+                    ),
+                )
+                self._update_controls()
+                self.update_connection_status(force=True)
+                self._show_error(
+                    AppError(
+                        "error.kill_switch_startup_recovery.title",
+                        "error.kill_switch_startup_recovery.message",
+                        details=(
+                            "The authenticated helper session ended before the "
+                            "crash-surviving protection state could be adopted."
+                        ),
+                    )
+                )
+                return
+
+            if self._kill_switch_session is not outcome.session:
+                self._close_kill_switch_session()
+            # Retain the exact authenticated broker first.  Only after this
+            # assignment may the recovery record be cleared or rotated.  This
+            # makes a changed session ID proof that the live GUI owns a retained
+            # helper session, rather than merely proof that a background worker
+            # once opened one.
+            self._kill_switch_session = outcome.session
+
+            try:
+                # Prove that the exact session object still transports a
+                # read-only request after the worker-to-GUI handoff.  Merely
+                # retaining a ready frame is not enough: pkexec or the broker
+                # may have exited between the worker result and this commit.
+                retained_status = outcome.session.status()
+                if retained_status != outcome.status:
+                    raise CrashRecoveryStateError(
+                        "The host protection state changed during the retained-session handoff."
+                    )
+                self._set_cached_kill_switch_status(retained_status)
+
+                if decision.disposition == CrashRecoveryDisposition.CLEAR_STALE_RECORD:
+                    self._crash_recovery_journal.clear()
+                elif decision.disposition == CrashRecoveryDisposition.ADOPT_CONNECTED:
+                    assert decision.route_plan is not None
+                    self._crash_recovery_journal.save_connected(
+                        profile_uuid=decision.profile_uuid,
+                        route_plan=decision.route_plan,
+                    )
+                elif decision.disposition == CrashRecoveryDisposition.ADOPT_BLOCKING:
+                    assert decision.route_plan is not None
+                    self._crash_recovery_journal.save_blocking(
+                        profile_uuid=decision.profile_uuid,
+                        route_plan=decision.route_plan,
+                    )
+            except Exception as exc:
+                self._set_cached_kill_switch_status(
+                    outcome.status,
+                    error=f"{type(exc).__name__}: {exc}",
+                )
+                self.log(
+                    "error",
+                    "log.kill_switch.startup_recovery.failed",
+                    details=f"{type(exc).__name__}: {exc}",
+                )
+                self._update_controls()
+                self.update_connection_status(force=True)
+                self._show_error(
+                    AppError(
+                        "error.kill_switch_startup_recovery.title",
+                        "error.kill_switch_startup_recovery.message",
+                        details=f"{type(exc).__name__}: {exc}",
+                    )
+                )
+                return
+
+            if decision.disposition in {
+                CrashRecoveryDisposition.NO_RECOVERY,
+                CrashRecoveryDisposition.CLEAR_STALE_RECORD,
+            }:
+                self._kill_switch_probe_baseline = None
+                self._kill_switch_route_plan = None
+                self.settings.remove("connection/profile_uuid")
+                self.settings.sync()
+                self._last_connected_state = False
+                self.log(
+                    "ok",
+                    "log.kill_switch.startup_recovery.stale_cleared"
+                    if decision.disposition == CrashRecoveryDisposition.CLEAR_STALE_RECORD
+                    else "log.kill_switch.startup_recovery.clean",
+                )
+            elif decision.adopted:
+                assert decision.route_plan is not None
+                assert decision.probe_baseline is not None
+                self.kill_switch_runtime.set_feature_enabled(True)
+                self.kill_switch_action.setChecked(True)
+                self._kill_switch_probe_baseline = decision.probe_baseline
+                self._kill_switch_route_plan = decision.route_plan
+                self.settings.setValue("connection/profile_uuid", decision.profile_uuid)
+                self.settings.sync()
+                connected = (
+                    decision.disposition == CrashRecoveryDisposition.ADOPT_CONNECTED
+                )
+                self._last_connected_state = connected
+                self.log(
+                    "ok" if connected else "warning",
+                    "log.kill_switch.startup_recovery.adopted_connected"
+                    if connected
+                    else "log.kill_switch.startup_recovery.adopted_blocking",
+                )
+            else:
+                if outcome.status.present:
+                    self.kill_switch_runtime.set_feature_enabled(True)
+                    self.kill_switch_action.setChecked(True)
+                self._set_cached_kill_switch_status(
+                    outcome.status,
+                    error=decision.reason,
+                )
+                self.log(
+                    "error",
+                    "log.kill_switch.startup_recovery.refused",
+                    details=decision.reason,
+                )
+
+            self._update_controls()
+            self.update_connection_status(force=True)
+            if decision.adopted or decision.disposition in {
+                CrashRecoveryDisposition.NO_RECOVERY,
+                CrashRecoveryDisposition.CLEAR_STALE_RECORD,
+            }:
+                self.refresh_public_info(show_errors=False)
+            else:
+                self._show_error(
+                    AppError(
+                        "error.kill_switch_startup_recovery.title",
+                        "error.kill_switch_startup_recovery.message",
+                        details=decision.reason,
+                    )
+                )
+
+        def failure(error: BaseException) -> None:
+            self._connection_busy = False
+            cause = error
+            if isinstance(error, _KillSwitchJobFailure):
+                cause = error.cause
+                if error.session is not None and error.session.is_open:
+                    if self._kill_switch_session is not error.session:
+                        self._close_kill_switch_session()
+                    self._kill_switch_session = error.session
+                self._set_cached_kill_switch_status(
+                    error.status,
+                    error=error.status_error or str(cause),
+                )
+            else:
+                self._set_cached_kill_switch_status(
+                    self._kill_switch_status,
+                    error=str(error),
+                )
+            self.log(
+                "error",
+                "log.kill_switch.startup_recovery.failed",
+                details=f"{type(cause).__name__}: {cause}",
+            )
+            self._update_controls()
+            self.update_connection_status(force=True)
+            self._show_error(
+                AppError(
+                    "error.kill_switch_startup_recovery.title",
+                    "error.kill_switch_startup_recovery.message",
+                    details=f"{type(cause).__name__}: {cause}",
+                )
+            )
+
+        self._run_worker(job, on_success=success, on_failure=failure)
 
     def _recheck_kill_switch_status(
         self,
@@ -968,6 +1287,7 @@ class MainWindow(QMainWindow):
             self.settings.remove("connection/profile_uuid")
             self.settings.sync()
             self._close_kill_switch_session()
+            self._clear_crash_recovery_record_after_safe_release()
             self.log("ok", "log.kill_switch.status_recheck.absent")
             self._last_connected_state = False
             self._update_controls()
@@ -1492,6 +1812,7 @@ class MainWindow(QMainWindow):
             self.kill_switch_action.setEnabled(True)
             self.log("ok", "log.kill_switch.preference.disabled")
             self._close_kill_switch_session()
+            self._clear_crash_recovery_record_after_safe_release()
             self._update_controls()
             self.update_connection_status(force=True)
             self.refresh_public_info(show_errors=False)
@@ -2193,6 +2514,10 @@ class MainWindow(QMainWindow):
                     raise RuntimeError(
                         "Protected connection returned no verified helper status."
                     )
+                self._save_connected_crash_recovery_record(
+                    profile_uuid=result.profile_uuid,
+                    route_plan=route_plan,
+                )
                 return _ProtectedConnectOutcome(
                     profile_uuid=result.profile_uuid,
                     session=session,
@@ -2249,6 +2574,7 @@ class MainWindow(QMainWindow):
                 self._set_cached_kill_switch_status(result.status)
                 self._kill_switch_probe_baseline = result.baseline
                 self._kill_switch_route_plan = result.route_plan
+                self.log("ok", "log.kill_switch.crash_record.connected_saved")
             else:
                 profile_uuid = str(result)
                 self._kill_switch_probe_baseline = None
@@ -2322,6 +2648,24 @@ class MainWindow(QMainWindow):
             return
         if not self.kill_switch_runtime.feature_enabled:
             return
+        profile_uuid = str(
+            self.settings.value("connection/profile_uuid", "")
+        ).strip()
+        route_plan = self._kill_switch_route_plan
+        if profile_uuid and route_plan is not None:
+            try:
+                self._save_blocking_crash_recovery_record(
+                    profile_uuid=profile_uuid,
+                    route_plan=route_plan,
+                )
+            except CrashRecoveryStateError as exc:
+                self.log(
+                    "error",
+                    "log.kill_switch.crash_record.blocking_failed",
+                    details=str(exc),
+                )
+            else:
+                self.log("ok", "log.kill_switch.crash_record.blocking_saved")
         self._protected_reconnect_scheduled = True
         self.log("warning", "log.kill_switch.recovery.tunnel_lost")
         QTimer.singleShot(
@@ -2396,6 +2740,10 @@ class MainWindow(QMainWindow):
                     route_plan=route_plan,
                     blocked_path_probe=baseline.ordinary_path_is_blocked,
                 )
+                self._save_connected_crash_recovery_record(
+                    profile_uuid=result.profile_uuid,
+                    route_plan=result.route_plan,
+                )
                 return _ProtectedReconnectOutcome(
                     profile_uuid=result.profile_uuid,
                     session=session,
@@ -2443,6 +2791,7 @@ class MainWindow(QMainWindow):
             self._set_cached_kill_switch_status(outcome.status)
             self._kill_switch_route_plan = outcome.route_plan
             self._kill_switch_probe_baseline = baseline
+            self.log("ok", "log.kill_switch.crash_record.connected_saved")
             self.settings.setValue(
                 "connection/profile_uuid",
                 outcome.profile_uuid,
@@ -2558,6 +2907,10 @@ class MainWindow(QMainWindow):
                 retained_route = FirewallRoutePlan.from_connection_plan(
                     result.connection_plan
                 )
+                self._save_connected_crash_recovery_record(
+                    profile_uuid=result.profile_uuid,
+                    route_plan=retained_route,
+                )
                 return _ProtectedServerSwitchOutcome(
                     profile_uuid=result.profile_uuid,
                     session=session,
@@ -2584,11 +2937,7 @@ class MainWindow(QMainWindow):
                     if not status_error:
                         status_error = str(vpn_status_exc)
                 else:
-                    if (
-                        still_connected
-                        and isinstance(exc, ProtectedServerSwitchError)
-                        and exc.old_vpn_disconnected
-                    ):
+                    if still_connected and not status_error:
                         status_error = (
                             "Protected server switching failed while NetworkManager still "
                             "reports a VPN connection; protection state requires attention."
@@ -2619,6 +2968,7 @@ class MainWindow(QMainWindow):
             self._set_cached_kill_switch_status(outcome.status)
             self._kill_switch_route_plan = outcome.route_plan
             self._kill_switch_probe_baseline = baseline
+            self.log("ok", "log.kill_switch.crash_record.connected_saved")
             self._active_region_id = region.region_id
             self._active_region_fallback = region.name
             self.settings.setValue("connection/selected_region_id", region.region_id)
@@ -2770,6 +3120,7 @@ class MainWindow(QMainWindow):
 
             self.settings.remove("connection/profile_uuid")
             self.settings.sync()
+            self._clear_crash_recovery_record_after_safe_release()
             self._last_connected_state = False
             self.log("ok", "log.disconnected")
             self._update_controls()

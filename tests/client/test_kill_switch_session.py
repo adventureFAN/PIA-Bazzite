@@ -29,12 +29,15 @@ def status_payload(action: str, state: str = "active") -> dict[str, object]:
         "table": "pia_bazzite_killswitch",
         "table_generation": 1,
         "capabilities": [
+            "inspect-route",
             "set-interfaces",
             "set-endpoints",
             "add-endpoint",
             "remove-endpoint",
         ],
         "problems": [],
+        "physical_interfaces": ["wan0"] if present else [],
+        "endpoints": ["198.51.100.10:1337"] if present else [],
     }
 
 
@@ -45,11 +48,13 @@ class FakeTransport:
         self.closed = 0
         self.session_pid = 4242
         self.start_error: Exception | None = None
+        self.alive = False
 
     def start(self, arguments, *, timeout, environment):
         self.starts.append((list(arguments), timeout, dict(environment)))
         if self.start_error is not None:
             raise self.start_error
+        self.alive = True
         return {
             "event": "ready",
             "session_protocol_version": 1,
@@ -79,7 +84,11 @@ class FakeTransport:
             "payload": payload,
         }
 
+    def is_alive(self):
+        return self.alive
+
     def close(self, *, timeout):
+        self.alive = False
         self.closed += 1
 
 
@@ -134,6 +143,24 @@ class KillSwitchSessionClientTests(unittest.TestCase):
         self.assertEqual(argv[1], "--disable-internal-agent")
         self.assertNotIn("LD_PRELOAD", environment)
         self.assertEqual(environment["DISPLAY"], ":1")
+
+
+    @patch("pia_bazzite.kill_switch_client.Path.is_symlink", return_value=False)
+    @patch("pia_bazzite.kill_switch_client.Path.lstat")
+    def test_is_open_tracks_transport_process_lifetime(self, lstat, is_symlink):
+        class Meta:
+            st_mode = 0o100755
+            st_uid = 0
+            st_gid = 0
+            st_nlink = 1
+        lstat.return_value = Meta()
+        transport = FakeTransport()
+        temporary, client = self.make_client(transport)
+        with temporary:
+            client.open()
+            self.assertTrue(client.is_open)
+            transport.alive = False
+            self.assertFalse(client.is_open)
 
     @patch("pia_bazzite.kill_switch_client.Path.is_symlink", return_value=False)
     @patch("pia_bazzite.kill_switch_client.Path.lstat")

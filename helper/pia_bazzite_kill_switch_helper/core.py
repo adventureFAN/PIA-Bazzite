@@ -273,6 +273,66 @@ def render_disable_ruleset() -> str:
     return f"destroy table inet {TABLE_NAME}\n"
 
 
+def _set_elements(set_object: dict[str, Any]) -> list[Any]:
+    elements = set_object.get("elem", [])
+    if elements is None:
+        return []
+    if not isinstance(elements, list):
+        raise ValidationError("nftables set elements are not a list.")
+    return elements
+
+
+def _parse_interface_elements(elements: Sequence[Any]) -> tuple[str, ...]:
+    values: list[str] = []
+    for element in elements:
+        if not isinstance(element, str):
+            raise ValidationError("Physical-interface set contains an invalid element.")
+        values.append(validate_interface(element))
+    return normalize_interfaces(values)
+
+
+def _parse_endpoint_element(element: Any, family: int) -> Endpoint:
+    address: Any
+    port: Any
+    if isinstance(element, dict) and set(element) == {"concat"}:
+        parts = element["concat"]
+    elif isinstance(element, list):
+        parts = element
+    elif isinstance(element, str) and " . " in element:
+        parts = element.split(" . ", 1)
+    else:
+        raise ValidationError("Endpoint set contains an invalid concatenated element.")
+    if not isinstance(parts, list) and not isinstance(parts, tuple):
+        raise ValidationError("Endpoint concatenation is invalid.")
+    if len(parts) != 2:
+        raise ValidationError("Endpoint concatenation must contain address and port.")
+    address, port = parts
+    if not isinstance(address, str):
+        raise ValidationError("Endpoint address in nftables status is invalid.")
+    if isinstance(port, int):
+        port_text = str(port)
+    elif isinstance(port, str) and port.isascii() and port.isdecimal():
+        port_text = port
+    else:
+        raise ValidationError("Endpoint port in nftables status is invalid.")
+    candidate = f"[{address}]:{port_text}" if family == 6 else f"{address}:{port_text}"
+    parsed = parse_endpoint(candidate)
+    if parsed.family != family:
+        raise ValidationError("Endpoint set contains an address from the wrong family.")
+    return parsed
+
+
+def _parse_endpoint_elements(
+    elements_v4: Sequence[Any],
+    elements_v6: Sequence[Any],
+) -> tuple[Endpoint, ...]:
+    parsed = [
+        *(_parse_endpoint_element(item, 4) for item in elements_v4),
+        *(_parse_endpoint_element(item, 6) for item in elements_v6),
+    ]
+    return normalize_endpoints(parsed)
+
+
 def parse_status_json(payload: str) -> dict[str, Any]:
     try:
         document = json.loads(payload)
@@ -285,7 +345,7 @@ def parse_status_json(payload: str) -> dict[str, Any]:
 
     table_found = False
     table_comment = ""
-    sets: dict[str, Any] = {}
+    sets: dict[str, dict[str, Any]] = {}
     chain: dict[str, Any] | None = None
     rule_comments: set[str] = set()
 
@@ -309,7 +369,7 @@ def parse_status_json(payload: str) -> dict[str, Any]:
         ):
             name = set_obj.get("name")
             if isinstance(name, str):
-                sets[name] = set_obj.get("type")
+                sets[name] = set_obj
 
         chain_obj = item.get("chain")
         if (
@@ -343,7 +403,7 @@ def parse_status_json(payload: str) -> dict[str, Any]:
         ENDPOINT_SET_V6: ["ipv6_addr", "inet_service"],
     }
     for name, expected_type in expected_set_types.items():
-        actual_type = sets.get(name)
+        actual_type = sets.get(name, {}).get("type")
         if isinstance(expected_type, list):
             valid_types = {tuple(expected_type), (" . ".join(expected_type),)}
             normalized_type = tuple(actual_type) if isinstance(actual_type, list) else (actual_type,)
@@ -351,6 +411,20 @@ def parse_status_json(payload: str) -> dict[str, Any]:
                 problems.append(f"set {name} is missing or has the wrong type")
         elif actual_type not in (expected_type, [expected_type]):
             problems.append(f"set {name} is missing or has the wrong type")
+
+    physical_interfaces: tuple[str, ...] = ()
+    endpoints: tuple[Endpoint, ...] = ()
+    if all(name in sets for name in expected_set_types):
+        try:
+            physical_interfaces = _parse_interface_elements(
+                _set_elements(sets[PHYSICAL_INTERFACE_SET])
+            )
+            endpoints = _parse_endpoint_elements(
+                _set_elements(sets[ENDPOINT_SET_V4]),
+                _set_elements(sets[ENDPOINT_SET_V6]),
+            )
+        except ValidationError as exc:
+            problems.append(f"firewall allowlist inspection failed: {exc}")
 
     if chain is None:
         problems.append("output base chain is missing")
@@ -378,8 +452,11 @@ def parse_status_json(payload: str) -> dict[str, Any]:
         "present": table_found,
         "verified": table_found and not problems,
         "state": "active" if table_found and not problems else "error",
+        "physical_interfaces": list(physical_interfaces),
+        "endpoints": [item.canonical for item in endpoints],
         "problems": problems,
         "capabilities": [
+            "inspect-route",
             "set-interfaces",
             "set-endpoints",
             "add-endpoint",
@@ -397,8 +474,11 @@ def disabled_status() -> dict[str, Any]:
         "present": False,
         "verified": True,
         "state": "disabled",
+        "physical_interfaces": [],
+        "endpoints": [],
         "problems": [],
         "capabilities": [
+            "inspect-route",
             "set-interfaces",
             "set-endpoints",
             "add-endpoint",

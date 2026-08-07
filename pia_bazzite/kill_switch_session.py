@@ -69,6 +69,9 @@ class SessionTransport(Protocol):
     ) -> Mapping[str, Any]:
         """Exchange one JSON request and response with the broker."""
 
+    def is_alive(self) -> bool:
+        """Return whether the broker process is still running."""
+
     def close(self, *, timeout: float) -> None:
         """Close the broker process and all pipes."""
 
@@ -144,6 +147,10 @@ class JsonLineSessionTransport:
             except HelperTimeoutError:
                 self._terminate_process()
                 raise
+
+    def is_alive(self) -> bool:
+        process = self._process
+        return process is not None and process.poll() is None
 
     def close(self, *, timeout: float) -> None:
         process = self._process
@@ -311,7 +318,18 @@ class KillSwitchSessionClient:
 
     @property
     def is_open(self) -> bool:
-        return self._ready is not None
+        if self._ready is None:
+            return False
+        checker = getattr(self.transport, "is_alive", None)
+        if checker is None:
+            # Backward-compatible for small test transports and third-party
+            # transports that predate the lifecycle probe. Real production
+            # transports always implement is_alive().
+            return True
+        try:
+            return bool(checker())
+        except Exception:
+            return False
 
     @property
     def session_pid(self) -> int | None:

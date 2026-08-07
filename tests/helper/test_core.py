@@ -171,11 +171,12 @@ class StatusParsingTests(unittest.TestCase):
             {"metainfo": {"json_schema_version": 1}},
             {"table": {"family": "inet", "name": TABLE_NAME, "comment": table_comment}},
             {"set": {"family": "inet", "table": TABLE_NAME,
-                     "name": PHYSICAL_INTERFACE_SET, "type": "ifname"}},
+                     "name": PHYSICAL_INTERFACE_SET, "type": "ifname", "elem": ["wlo1"]}},
             {"set": {"family": "inet", "table": TABLE_NAME, "name": ENDPOINT_SET_V4,
-                     "type": ["ipv4_addr", "inet_service"]}},
+                     "type": ["ipv4_addr", "inet_service"],
+                     "elem": [{"concat": ["198.51.100.1", 1337]}]}},
             {"set": {"family": "inet", "table": TABLE_NAME, "name": ENDPOINT_SET_V6,
-                     "type": ["ipv6_addr", "inet_service"]}},
+                     "type": ["ipv6_addr", "inet_service"], "elem": []}},
             {"chain": {"family": "inet", "table": TABLE_NAME, "name": CHAIN_NAME,
                        "type": "filter", "hook": "output", "prio": -100,
                        "policy": "accept", "comment": CHAIN_COMMENT}},
@@ -190,6 +191,9 @@ class StatusParsingTests(unittest.TestCase):
         self.assertEqual(status["problems"], [])
         self.assertIn("set-endpoints", status["capabilities"])
         self.assertEqual(status["table_generation"], 1)
+        self.assertEqual(status["physical_interfaces"], ["wlo1"])
+        self.assertEqual(status["endpoints"], ["198.51.100.1:1337"])
+        self.assertIn("inspect-route", status["capabilities"])
 
     def test_missing_ownership_or_block_rule_is_error(self) -> None:
         status = parse_status_json(self._payload(table_comment="foreign", include_block=False))
@@ -209,11 +213,23 @@ class StatusParsingTests(unittest.TestCase):
         self.assertFalse(status["verified"])
         self.assertTrue(any(PHYSICAL_INTERFACE_SET in problem for problem in status["problems"]))
 
+    def test_invalid_allowlist_elements_prevent_verified_status(self) -> None:
+        payload = json.loads(self._payload())
+        for item in payload["nftables"]:
+            set_object = item.get("set", {})
+            if set_object.get("name") == ENDPOINT_SET_V4:
+                set_object["elem"] = [{"concat": ["127.0.0.1", 1337]}]
+        status = parse_status_json(json.dumps(payload))
+        self.assertFalse(status["verified"])
+        self.assertTrue(any("allowlist inspection" in problem for problem in status["problems"]))
+
     def test_disabled_status_is_verified_but_not_present(self) -> None:
         status = disabled_status()
         self.assertFalse(status["present"])
         self.assertTrue(status["verified"])
         self.assertEqual(status["state"], "disabled")
+        self.assertEqual(status["physical_interfaces"], [])
+        self.assertEqual(status["endpoints"], [])
 
     def test_invalid_json_is_rejected(self) -> None:
         with self.assertRaises(ValidationError):
