@@ -95,6 +95,9 @@ class CliTests(unittest.TestCase):
         lock.return_value.__enter__ = Mock(return_value=None)
         lock.return_value.__exit__ = Mock(return_value=False)
         runner = self._configured_runner(runner_cls)
+        # Full Kill Switch enable first proves that the separate IPv6-only
+        # guard table is absent, then verifies the newly applied full table.
+        runner.table_exists.side_effect = [False, True]
         stdout = io.StringIO()
         with patch("sys.stdout", stdout):
             code = cli.main([

@@ -20,6 +20,7 @@ from .kill_switch_client import (
     HelperResponse,
     HelperTimeoutError,
     InvalidHelperResponseError,
+    IPv6GuardStatus,
     KillSwitchClientError,
     KillSwitchStatus,
     PKEXEC_PATH,
@@ -337,7 +338,20 @@ class KillSwitchSessionClient:
 
     def open(self) -> SessionReady:
         if self._ready is not None:
-            return self._ready
+            if self.is_open:
+                return self._ready
+            # The broker can exit independently after its request/idle limit or
+            # because of a crash.  Never reuse the cached ready frame once the
+            # transport is no longer alive: clean up the dead transport and
+            # establish a fresh authenticated session instead.
+            self._ready = None
+            self._request_id = 0
+            try:
+                self.transport.close(timeout=self.timeout)
+            except Exception:
+                # A dead/broken transport may itself fail during cleanup.  The
+                # following preflight/start is the authoritative recovery path.
+                pass
         self._preflight()
         frame = self.transport.start(
             [
@@ -397,6 +411,15 @@ class KillSwitchSessionClient:
 
     def emergency_reset(self) -> KillSwitchStatus:
         return self._status_action("emergency-reset", {})
+
+    def ipv6_guard_status(self) -> IPv6GuardStatus:
+        return self._ipv6_guard_action("ipv6-guard-status")
+
+    def ipv6_guard_enable(self) -> IPv6GuardStatus:
+        return self._ipv6_guard_action("ipv6-guard-enable")
+
+    def ipv6_guard_disable(self) -> IPv6GuardStatus:
+        return self._ipv6_guard_action("ipv6-guard-disable")
 
     def close(self) -> None:
         if self._ready is None:
@@ -462,6 +485,45 @@ class KillSwitchSessionClient:
             "remove-endpoint",
         }:
             expected_state = "active"
+        if expected_state is not None and status.state != expected_state:
+            raise InvalidHelperResponseError(
+                f"Action {action!r} returned state {status.state!r}, expected {expected_state!r}."
+            )
+        return status
+
+    def _ipv6_guard_action(self, action: str) -> IPv6GuardStatus:
+        frame = self._exchange(action, {})
+        returncode = _require_session_int(frame, "returncode")
+        payload = frame.get("payload")
+        if not isinstance(payload, dict):
+            raise InvalidHelperResponseError(
+                "Kill-switch session IPv6 guard payload must be a JSON object."
+            )
+        _validate_envelope(payload, expected_action=action)
+        ok = _require_bool(payload, "ok")
+        if returncode == 0 and not ok:
+            raise InvalidHelperResponseError(
+                "Session returned an IPv6 guard error payload with a successful exit status."
+            )
+        if returncode != 0 and ok:
+            raise InvalidHelperResponseError(
+                "Session returned an IPv6 guard success payload with a failing exit status."
+            )
+        if not ok:
+            raise HelperCommandError(
+                action=action,
+                kind=_require_string(payload, "error"),
+                message=_require_string(payload, "message"),
+                returncode=returncode,
+                payload=payload,
+            )
+        status = IPv6GuardStatus.from_response(
+            HelperResponse(action=action, returncode=returncode, payload=payload)
+        )
+        expected_state = (
+            "active" if action == "ipv6-guard-enable" else
+            "disabled" if action == "ipv6-guard-disable" else None
+        )
         if expected_state is not None and status.state != expected_state:
             raise InvalidHelperResponseError(
                 f"Action {action!r} returned state {status.state!r}, expected {expected_state!r}."

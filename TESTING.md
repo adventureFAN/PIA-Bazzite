@@ -1,4 +1,4 @@
-# PIA Bazzite 0.5.0 release test checklist
+# PIA Bazzite 0.6.0 release test checklist
 
 The static self-test does not contact PIA and does not change NetworkManager.
 
@@ -20,8 +20,41 @@ The static self-test does not contact PIA and does not change NetworkManager.
 16. Test the live log copy, clear, and save actions.
 17. Confirm a second application start raises the existing instance.
 18. On Bazzite, build with `./packaging/build-appimage-podman.sh`.
-19. Run `APPIMAGE_EXTRACT_AND_RUN=1 ./PIA-Bazzite-0.5.0-x86_64.AppImage --version`.
+19. Run `APPIMAGE_EXTRACT_AND_RUN=1 ./PIA-Bazzite-0.6.0-x86_64.AppImage --version`.
 20. Integrate the AppImage with Gear Lever and repeat the connection tests.
+
+## Stage 8B: packaged AppImage helper install/upgrade gate
+
+Run:
+
+```bash
+bash tools/release-stage8b-self-test.sh
+```
+
+This gate is unprivileged and network-free. It verifies exact AppImage-to-installed-helper
+hash matching, missing/outdated/unsafe classifications, the explicit Polkit install or
+upgrade command boundary, post-install re-verification, AppRun bundle discovery, and GUI
+gating before first enable or crash-recovery startup. Matching stage/protocol numbers alone
+never make an older helper current. See
+`docs/release/STAGE8B_PACKAGED_HELPER_INSTALL_UPGRADE.md`.
+
+The real AppImage host gate remains separate and is run only after this self-test passes.
+
+
+## Stage 8A: 0.6.0 release and AppImage packaging audit
+
+Run:
+
+```bash
+bash tools/release-stage8a-self-test.sh
+```
+
+This gate is unprivileged and network-free. It verifies that the 0.6.0 version is
+consistent across runtime, desktop/AppStream metadata, release notes, workflows, and
+the AppImage builder. It also builds the fixed Kill Switch helper payload into a
+temporary directory and checks its manifest and hashes. The AppImage now carries the
+exact helper installer payload required for Stage 8B; Stage 8B is responsible for the
+explicit authenticated install/upgrade flow and the first real AppImage host test.
 
 
 ## Stage 6C.2 emergency-reset reconciliation
@@ -75,7 +108,7 @@ bash tools/kill-switch-crash-stage7b-self-test.sh
 ```
 
 It compiles the project and runs all connection, recovery, crash-state, UI,
-client, helper, Polkit, and v0.5.0 regression tests without touching the host
+client, helper, Polkit, and current release regression tests without touching the host
 network.
 
 The real test is intentionally separate:
@@ -267,7 +300,7 @@ bash tools/kill-switch-crash-stage7d-self-test.sh
 ```
 
 This includes the full Stage-5/6 and Stage-7 recovery suite plus the existing UI,
-client, helper, Polkit, and v0.5.0 regression tests. It does not use privilege
+client, helper, Polkit, and current release regression tests. It does not use privilege
 escalation or change host networking.
 
 The final real Stage-7 host test is:
@@ -305,3 +338,25 @@ driver loaded the Stage-7C.4 dataclass module with `exec_module()` before regist
 in `sys.modules`. Stage 7D.1 fixes that Python 3.14 compatibility issue and permanently
 smoke-tests the complete Stage-7D import path. This regression belongs to the test
 harness; production VPN/firewall behavior was not exercised by the failed run.
+
+### Stage 8B.2 — real 0.6.0 AppImage helper host gate
+
+Run the unprivileged gate first:
+
+```bash
+bash tools/release-stage8b2-self-test.sh
+```
+
+The real Bazzite host gate builds the Ubuntu-22.04 release-candidate AppImage, verifies its helper bundle, proves that the user-readable AppImage FUSE payload can be copied into the exact private normal-filesystem staging path used for privilege handoff and read there by root, and then exercises missing/current/outdated helper installation states without intentionally connecting the VPN:
+
+```bash
+bash tools/release-stage8b2-host-test.sh
+```
+
+If the interactive gate fails after deliberately changing the installed helper and the host is otherwise clean, use:
+
+```bash
+bash tools/release-stage8b2-emergency-restore.sh
+```
+
+If a VPN connection or production Kill Switch table exists, use the Stage-7D Emergency Reset instead of the helper-only restore.

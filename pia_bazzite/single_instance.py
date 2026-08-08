@@ -1,16 +1,13 @@
 from __future__ import annotations
 
-from PySide6.QtCore import QCoreApplication, QObject, Signal
+from PySide6.QtCore import QCoreApplication, QLockFile, QObject, Signal
 from PySide6.QtNetwork import QLocalServer, QLocalSocket
+
+from .settings import state_dir
 
 
 def instance_is_running(name: str, *, timeout_ms: int = 250) -> bool:
-    """Return True only when a live local instance accepts connections.
-
-    A stale local-server socket does not count as a running instance because
-    ``waitForConnected`` must complete successfully. The probe never removes
-    sockets and never sends an activation request.
-    """
+    """Return True only when a live local instance accepts connections."""
 
     if not name.strip():
         raise ValueError("Single-instance name must not be empty.")
@@ -35,23 +32,47 @@ class SingleInstance(QObject):
 
     def __init__(self, name: str) -> None:
         super().__init__()
+        if not name.strip():
+            raise ValueError("Single-instance name must not be empty.")
         self._name = name
+        safe_name = "".join(ch if ch.isalnum() or ch in "._-" else "_" for ch in name)
+        self._lock = QLockFile(str(state_dir() / f"{safe_name}.instance.lock"))
+        # A lock is owned for the lifetime of this process.  QLockFile can
+        # recover locks whose recorded process no longer exists; do not use a
+        # time-only expiry that could race a slow but live first instance.
+        self._lock.setStaleLockTime(0)
         self._server = QLocalServer(self)
         self._server.newConnection.connect(self._accept_connections)
 
-    def claim(self) -> bool:
+    def _activate_existing(self) -> bool:
         probe = QLocalSocket()
         probe.connectToServer(self._name)
-        if probe.waitForConnected(250):
-            probe.write(b"activate")
-            probe.flush()
-            probe.waitForBytesWritten(250)
-            probe.disconnectFromServer()
+        if not probe.waitForConnected(250):
+            return False
+        probe.write(b"activate")
+        probe.flush()
+        probe.waitForBytesWritten(250)
+        probe.disconnectFromServer()
+        return True
+
+    def claim(self) -> bool:
+        # The lock serializes stale-socket cleanup.  Without it, two processes
+        # starting together can both observe no listener and one can remove the
+        # other's just-created QLocalServer socket.
+        if not self._lock.tryLock(0):
+            self._activate_existing()
             return False
 
-        # A stale socket can remain after a crash.
+        if self._activate_existing():
+            self._lock.unlock()
+            return False
+
         QLocalServer.removeServer(self._name)
-        return self._server.listen(self._name)
+        if self._server.listen(self._name):
+            return True
+
+        self._lock.unlock()
+        return False
 
     def _accept_connections(self) -> None:
         while self._server.hasPendingConnections():

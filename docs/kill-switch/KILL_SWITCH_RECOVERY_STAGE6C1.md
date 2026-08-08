@@ -45,7 +45,7 @@ and the documented Emergency Reset is shown.
 Run:
 
 ```bash
-cd /home/alex/PIA-Bazzite
+cd $HOME/PIA-Bazzite
 bash tools/kill-switch-recovery-stage6c1-self-test.sh
 ```
 

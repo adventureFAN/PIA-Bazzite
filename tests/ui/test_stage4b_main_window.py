@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import json
 from pathlib import Path
 import unittest
@@ -96,7 +97,17 @@ class Stage4BMainWindowStaticTests(unittest.TestCase):
 
     def test_preview_uses_real_main_window_without_network_actions(self) -> None:
         source = PREVIEW.read_text(encoding="utf-8")
-        self.assertIn("from pia_bazzite.gui import MainWindow", source)
+        tree = ast.parse(source)
+        imports_main_window = any(
+            isinstance(node, ast.ImportFrom)
+            and node.module == "pia_bazzite.gui"
+            and any(alias.name == "MainWindow" for alias in node.names)
+            for node in ast.walk(tree)
+        )
+        self.assertTrue(
+            imports_main_window,
+            "Preview must import MainWindow from pia_bazzite.gui.",
+        )
         self.assertIn("stage4_preview=True", source)
         self.assertIn('app.setApplicationDisplayName("PIA Bazzite")', source)
         self.assertNotIn("network_manager.", source)

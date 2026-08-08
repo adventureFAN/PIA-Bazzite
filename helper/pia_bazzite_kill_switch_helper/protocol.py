@@ -15,6 +15,9 @@ ACTIONS = (
     "remove-endpoint",
     "disable",
     "emergency-reset",
+    "ipv6-guard-status",
+    "ipv6-guard-enable",
+    "ipv6-guard-disable",
 )
 
 

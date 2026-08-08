@@ -19,7 +19,8 @@ class Stage6CStaticTests(unittest.TestCase):
         self.assertIn("FirewallRoutePlan", source)
         self.assertIn("PreparedServerSwitch", source)
         self.assertNotIn("session.disable()", source)
-        self.assertNotIn("emergency_reset(", source)
+        self.assertIn("run_verified_emergency_reset", source)
+        self.assertNotIn("session.emergency_reset()", source)
 
     def test_initial_protected_connection_retains_exact_route_for_recovery(self) -> None:
         source = GUI.read_text(encoding="utf-8")

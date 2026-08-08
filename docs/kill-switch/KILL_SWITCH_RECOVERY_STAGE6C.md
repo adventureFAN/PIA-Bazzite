@@ -52,7 +52,7 @@ as an external NetworkManager action.
 Run:
 
 ```bash
-cd /home/alex/PIA-Bazzite
+cd $HOME/PIA-Bazzite
 bash tools/kill-switch-recovery-stage6c-self-test.sh
 ```
 

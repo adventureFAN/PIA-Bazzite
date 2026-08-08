@@ -57,7 +57,7 @@ have both passed.
 Run:
 
 ```bash
-cd /home/alex/PIA-Bazzite
+cd $HOME/PIA-Bazzite
 bash tools/kill-switch-recovery-stage6a-self-test.sh
 ```
 

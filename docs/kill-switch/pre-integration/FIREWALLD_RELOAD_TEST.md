@@ -19,7 +19,7 @@ Before starting:
 3. Optionally prepare the emergency reset in another terminal:
 
    ```bash
-   cd /home/alex/PIA-Bazzite
+   cd $HOME/PIA-Bazzite
    ./tools/kill-switch-emergency-reset.sh
    ```
 

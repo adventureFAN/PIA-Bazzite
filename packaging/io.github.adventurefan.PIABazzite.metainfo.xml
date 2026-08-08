@@ -43,6 +43,14 @@
   </supports>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="0.6.0" date="2026-08-08">
+      <description>
+        <p>Adds the optional fail-closed Session Kill Switch with protected
+        reconnect and server switching, crash-safe recovery and automatic
+        takeover, verified Reset Kill Switch Protection recovery, and a separate IPv6-only
+        firewall guard that prevents native IPv6 bypass in normal VPN mode.</p>
+      </description>
+    </release>
     <release version="0.5.0" date="2026-08-03">
       <description>
         <p>First public release with AppImage packaging, final PIA shield

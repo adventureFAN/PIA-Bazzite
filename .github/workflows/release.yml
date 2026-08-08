@@ -13,17 +13,14 @@ jobs:
   appimage:
     runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.10"
           cache: "pip"
 
-      - name: Run static self-test
-        run: python self_test.py
-
-      - name: Install Qt runtime libraries
+      - name: Install test and build runtime
         run: |
           sudo apt-get update
           sudo apt-get install --yes --no-install-recommends \
@@ -58,8 +55,34 @@ jobs:
             libxkbcommon0 \
             libxkbcommon-x11-0 \
             libxrender1
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
 
-      - name: Build AppImage
+      - name: Run authoritative unprivileged release gate
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: bash tools/release-unprivileged-gate.sh
+
+      - name: Verify release tag matches application version
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          EXPECTED="v$(python -c 'from pia_bazzite import __version__; print(__version__)')"
+          if [ "$GITHUB_REF_NAME" != "$EXPECTED" ]; then
+            echo "Release tag $GITHUB_REF_NAME does not match application version $EXPECTED." >&2
+            exit 1
+          fi
+
+      - name: Restore exact release source snapshot after tests
+        run: |
+          git reset --hard "$GITHUB_SHA"
+          git clean -ffdx
+          test -z "$(git status --porcelain --untracked-files=all)"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+
+      - name: Build AppImage from exact checked-out commit
+        env:
+          PIA_BAZZITE_BUILD_MODE: release
+          PIA_BAZZITE_SOURCE_COMMIT: ${{ github.sha }}
         run: ./packaging/build-appimage.sh
 
       - name: Smoke-test AppImage
@@ -67,9 +90,10 @@ jobs:
           APPIMAGE=$(find dist -maxdepth 1 -name 'PIA-Bazzite-*-x86_64.AppImage' -print -quit)
           chmod +x "$APPIMAGE"
           APPIMAGE_EXTRACT_AND_RUN=1 "$APPIMAGE" --version
-          sha256sum "$APPIMAGE" > "$APPIMAGE.sha256"
+          (cd dist && sha256sum --check "$(basename "$APPIMAGE").sha256")
+          (cd dist && sha256sum "$(basename "$APPIMAGE")" > "$(basename "$APPIMAGE").sha256")
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: PIA-Bazzite-AppImage
           path: |
@@ -78,9 +102,9 @@ jobs:
 
       - name: Publish GitHub release
         if: startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
-          body_path: RELEASE_NOTES_0.5.0.md
+          body_path: RELEASE_NOTES_0.6.0.md
           files: |
             dist/*.AppImage
             dist/*.sha256

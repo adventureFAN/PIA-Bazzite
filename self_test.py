@@ -4,10 +4,12 @@ from __future__ import annotations
 import ast
 import json
 from pathlib import Path
+
+from pia_bazzite import __version__
 import xml.etree.ElementTree as ET
 
 ROOT = Path(__file__).resolve().parent
-REPORT = ROOT / "pia_v05_self_test_report.txt"
+REPORT = ROOT / "pia_release_self_test_report.txt"
 APP_ID = "io.github.adventurefan.PIABazzite"
 
 def main() -> int:
@@ -18,7 +20,7 @@ def main() -> int:
         print(message)
         lines.append(message)
 
-    write("PIA Bazzite 0.5.0 – self-test")
+    write(f"PIA Bazzite {__version__} – self-test")
     write("This test does not contact PIA and does not change NetworkManager.")
     write()
 
@@ -92,7 +94,7 @@ def main() -> int:
     write("Result: " + ("OK" if not missing_files else "FAILED"))
     write()
 
-    write("TEST 6: v0.5.0 release behavior")
+    write(f"TEST 6: v{__version__} release behavior")
     gui_source = (ROOT / "pia_bazzite" / "gui.py").read_text(encoding="utf-8")
     icon_source = (ROOT / "pia_bazzite" / "icons.py").read_text(encoding="utf-8")
     main_source = (ROOT / "main.py").read_text(encoding="utf-8")
@@ -125,12 +127,16 @@ def main() -> int:
         ROOT / "CHANGELOG.md",
         ROOT / "SECURITY.md",
         ROOT / "CONTRIBUTING.md",
-        ROOT / "RELEASE_NOTES_0.5.0.md",
+        ROOT / f"RELEASE_NOTES_{__version__}.md",
         ROOT / ".github" / "workflows" / "ci.yml",
         ROOT / ".github" / "workflows" / "release.yml",
         ROOT / "packaging" / "build-appimage.sh",
-            ROOT / "packaging" / "build-appimage-podman.sh",
+        ROOT / "packaging" / "build-appimage-podman.sh",
+        ROOT / "packaging" / "build-helper-bundle.py",
+        ROOT / "packaging" / "collect_third_party_licenses.py",
         ROOT / "packaging" / "appimage" / "PIA-Bazzite.spec",
+        ROOT / "tools" / "release-unprivileged-gate.sh",
+        ROOT / "tools" / "release-stage8c2-packaging-host-test.sh",
     ]
     missing_release = [
         str(path.relative_to(ROOT)) for path in release_files if not path.is_file()

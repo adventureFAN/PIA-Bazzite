@@ -6,7 +6,7 @@ from pathlib import Path
 import subprocess
 from typing import Sequence
 
-from .core import TABLE_NAME
+from .core import IPV6_GUARD_TABLE_NAME, TABLE_NAME
 
 NFT_CANDIDATES = (
     Path("/usr/sbin/nft"),
@@ -62,8 +62,15 @@ class NftRunner:
             raise NftError(f"Could not execute nft safely: {exc}") from exc
         return CommandResult(completed.returncode, completed.stdout, completed.stderr)
 
-    def table_exists(self) -> bool:
-        result = self._run(["list", "table", "inet", TABLE_NAME], timeout=5.0)
+    @staticmethod
+    def _validate_table_name(table_name: str) -> str:
+        if table_name not in {TABLE_NAME, IPV6_GUARD_TABLE_NAME}:
+            raise NftError("Refusing to inspect an nftables table outside the fixed helper scope.")
+        return table_name
+
+    def table_exists(self, table_name: str = TABLE_NAME) -> bool:
+        table = self._validate_table_name(table_name)
+        result = self._run(["list", "table", "inet", table], timeout=5.0)
         if result.returncode == 0:
             return True
         detail = (result.stderr or result.stdout or "").strip()
@@ -71,8 +78,9 @@ class NftRunner:
             return False
         raise NftError(f"Could not determine whether the helper table exists: {detail or 'unknown error'}")
 
-    def list_table_json(self) -> CommandResult:
-        return self._run(["-j", "list", "table", "inet", TABLE_NAME], timeout=8.0)
+    def list_table_json(self, table_name: str = TABLE_NAME) -> CommandResult:
+        table = self._validate_table_name(table_name)
+        return self._run(["-j", "list", "table", "inet", table], timeout=8.0)
 
     def check_script(self, script: str) -> None:
         result = self._run(["--check", "-f", "-"], input_text=script)

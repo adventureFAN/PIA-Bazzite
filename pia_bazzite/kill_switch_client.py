@@ -17,6 +17,7 @@ EXPECTED_SCHEMA_VERSION = 1
 EXPECTED_HELPER_STAGE = 5
 DEFAULT_TIMEOUT_SECONDS = 120.0
 MAX_OUTPUT_BYTES = 128 * 1024
+IPV6_GUARD_TABLE_NAME = "pia_bazzite_ipv6_guard"
 
 _ACTIONS = {
     "status",
@@ -27,6 +28,9 @@ _ACTIONS = {
     "remove-endpoint",
     "disable",
     "emergency-reset",
+    "ipv6-guard-status",
+    "ipv6-guard-enable",
+    "ipv6-guard-disable",
 }
 _DANGEROUS_ENVIRONMENT_KEYS = {
     "APPDIR",
@@ -39,6 +43,7 @@ _DANGEROUS_ENVIRONMENT_KEYS = {
     "LD_PRELOAD",
     "PYTHONHOME",
     "PYTHONPATH",
+    "PIA_BAZZITE_HELPER_BUNDLE",
     "QML2_IMPORT_PATH",
     "QT_PLUGIN_PATH",
 }
@@ -225,6 +230,80 @@ class KillSwitchStatus:
         )
 
 
+@dataclass(frozen=True, slots=True)
+class IPv6GuardStatus:
+    action: str
+    state: str
+    present: bool
+    verified: bool
+    table: str
+    table_generation: int
+    capabilities: tuple[str, ...]
+    problems: tuple[str, ...]
+    payload: Mapping[str, Any]
+
+    @property
+    def protection_active(self) -> bool:
+        return (
+            self.state == "active"
+            and self.present
+            and self.verified
+            and not self.problems
+        )
+
+    @classmethod
+    def from_response(cls, response: HelperResponse) -> "IPv6GuardStatus":
+        payload = response.payload
+        state = _require_string(payload, "state")
+        if state not in {"active", "disabled"}:
+            raise InvalidHelperResponseError(
+                f"Helper returned unsupported IPv6 guard state {state!r}."
+            )
+        present = _require_bool(payload, "present")
+        verified = _require_bool(payload, "verified")
+        table = _require_string(payload, "table")
+        table_generation = _require_int(payload, "table_generation")
+        capabilities = _require_string_tuple(payload, "capabilities")
+        problems = _require_string_tuple(payload, "problems")
+
+        if table != IPV6_GUARD_TABLE_NAME:
+            raise InvalidHelperResponseError(
+                f"Helper returned unexpected IPv6 guard table {table!r}."
+            )
+        if not verified:
+            raise InvalidHelperResponseError(
+                "IPv6 guard response is not structurally verified."
+            )
+        if problems:
+            raise InvalidHelperResponseError(
+                "IPv6 guard response reports structural problems: " + "; ".join(problems)
+            )
+        if state == "active" and not present:
+            raise InvalidHelperResponseError(
+                "Helper claims an active IPv6 guard while its table is absent."
+            )
+        if state == "disabled" and present:
+            raise InvalidHelperResponseError(
+                "Helper claims a disabled IPv6 guard while its table is present."
+            )
+        if "ipv6-only-guard" not in capabilities:
+            raise InvalidHelperResponseError(
+                "Helper response does not advertise the IPv6-only guard capability."
+            )
+
+        return cls(
+            action=response.action,
+            state=state,
+            present=present,
+            verified=verified,
+            table=table,
+            table_generation=table_generation,
+            capabilities=capabilities,
+            problems=problems,
+            payload=dict(payload),
+        )
+
+
 class KillSwitchClient:
     """Strict unprivileged client for the fixed Polkit helper protocol."""
 
@@ -287,6 +366,29 @@ class KillSwitchClient:
 
     def emergency_reset(self) -> KillSwitchStatus:
         return self._status_action("emergency-reset")
+
+    def ipv6_guard_status(self) -> IPv6GuardStatus:
+        return self._ipv6_guard_action("ipv6-guard-status")
+
+    def ipv6_guard_enable(self) -> IPv6GuardStatus:
+        return self._ipv6_guard_action("ipv6-guard-enable")
+
+    def ipv6_guard_disable(self) -> IPv6GuardStatus:
+        return self._ipv6_guard_action("ipv6-guard-disable")
+
+    def _ipv6_guard_action(self, action: str) -> IPv6GuardStatus:
+        response = self._invoke(action, ())
+        status = IPv6GuardStatus.from_response(response)
+        expected_state = (
+            "active" if action == "ipv6-guard-enable" else
+            "disabled" if action == "ipv6-guard-disable" else None
+        )
+        if expected_state is not None and status.state != expected_state:
+            raise InvalidHelperResponseError(
+                f"Action {action!r} returned state {status.state!r}, "
+                f"expected {expected_state!r}."
+            )
+        return status
 
     def _status_action(
         self,
@@ -566,6 +668,7 @@ def _require_string_tuple(payload: Mapping[str, Any], key: str) -> tuple[str, ..
 
 
 __all__ = [
+    "IPv6GuardStatus",
     "AuthorizationDeniedError",
     "DEFAULT_TIMEOUT_SECONDS",
     "EXPECTED_HELPER_STAGE",

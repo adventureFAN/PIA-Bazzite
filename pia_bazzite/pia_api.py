@@ -1,22 +1,32 @@
 from __future__ import annotations
 
+import base64
+import binascii
 import concurrent.futures
 import http.client
+import ipaddress
 import json
+import os
 from pathlib import Path
+import re
+import secrets
 import shutil
 import socket
 import ssl
+import stat
 import subprocess
 import time
-from typing import Iterable
+from typing import Iterable, TYPE_CHECKING
 from urllib.parse import urlencode
 
 import requests
 
+from . import __version__
 from .app_errors import AppError
-from .credentials import Credentials
 from .models import PublicNetworkInfo, Region
+
+if TYPE_CHECKING:
+    from .credentials import Credentials
 
 
 SERVER_LIST_URL = "https://serverlist.piaservers.net/vpninfo/servers/v6"
@@ -27,6 +37,87 @@ WIREGUARD_PORT = 1337
 
 class PiaError(AppError):
     pass
+
+
+def _pia_validation_error(details: str) -> PiaError:
+    return PiaError(
+        "error.pia_format.title",
+        "error.pia_format.message",
+        details=details,
+    )
+
+
+def _reject_control_text(value: object, field: str, *, max_length: int = 512) -> str:
+    if not isinstance(value, str):
+        raise _pia_validation_error(f"{field} is not text.")
+    text = value.strip()
+    if not text or len(text) > max_length:
+        raise _pia_validation_error(f"{field} is empty or too long.")
+    if any(ord(char) < 0x20 or ord(char) == 0x7F for char in text):
+        raise _pia_validation_error(f"{field} contains control characters.")
+    return text
+
+
+def _validate_ip(value: object, field: str) -> str:
+    text = _reject_control_text(value, field, max_length=64)
+    try:
+        address = ipaddress.ip_address(text)
+    except ValueError as exc:
+        raise _pia_validation_error(f"{field} is not a numeric IP address.") from exc
+    if address.is_unspecified or address.is_loopback or address.is_multicast:
+        raise _pia_validation_error(f"{field} is not an allowed IP address.")
+    return address.compressed
+
+
+def _validate_interface_address(value: object, field: str) -> str:
+    text = _reject_control_text(value, field, max_length=96)
+    try:
+        interface = ipaddress.ip_interface(text)
+    except ValueError as exc:
+        raise _pia_validation_error(f"{field} is not a valid interface address.") from exc
+    if interface.ip.is_unspecified or interface.ip.is_loopback or interface.ip.is_multicast:
+        raise _pia_validation_error(f"{field} is not an allowed interface address.")
+    return str(interface)
+
+
+def _validate_hostname(value: object, field: str) -> str:
+    text = _reject_control_text(value, field, max_length=253).lower().rstrip(".")
+    labels = text.split(".")
+    # PIA's server-list `cn` values are certificate names and may be either
+    # fully-qualified DNS names or a single RFC-style hostname label such as
+    # "helsinki403".  Both forms are valid TLS server names for the pinned
+    # PIA CA; control characters and invalid label syntax remain rejected.
+    if any(
+        not re.fullmatch(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?", label)
+        for label in labels
+    ):
+        raise _pia_validation_error(f"{field} is not a valid DNS hostname.")
+    return text
+
+
+def _validate_port(value: object, field: str) -> int:
+    if isinstance(value, bool):
+        raise _pia_validation_error(f"{field} is not a valid port.")
+    try:
+        port = int(value)
+    except (TypeError, ValueError) as exc:
+        raise _pia_validation_error(f"{field} is not a valid port.") from exc
+    if str(port) != str(value).strip() and not isinstance(value, int):
+        raise _pia_validation_error(f"{field} is not a canonical port value.")
+    if port < 1 or port > 65535:
+        raise _pia_validation_error(f"{field} is outside the valid port range.")
+    return port
+
+
+def _validate_wireguard_key(value: object, field: str) -> str:
+    text = _reject_control_text(value, field, max_length=64)
+    try:
+        decoded = base64.b64decode(text, validate=True)
+    except (binascii.Error, ValueError) as exc:
+        raise _pia_validation_error(f"{field} is not valid base64.") from exc
+    if len(decoded) != 32:
+        raise _pia_validation_error(f"{field} is not a 32-byte WireGuard key.")
+    return text
 
 
 def _resource_path(filename: str) -> Path:
@@ -78,23 +169,35 @@ def fetch_regions(timeout: float = 15.0) -> list[Region]:
             details=str(exc),
         ) from exc
 
+    if not isinstance(payload, dict) or not isinstance(payload.get("regions"), list):
+        raise _pia_validation_error("PIA server-list payload has no regions array.")
+
     regions: list[Region] = []
     malformed_entries = 0
-    for item in payload.get("regions", []):
+    for item in payload["regions"]:
         try:
+            if not isinstance(item, dict) or not isinstance(item.get("servers"), dict):
+                raise ValueError("invalid region entry")
             meta = item["servers"]["meta"][0]
             wireguard = item["servers"]["wg"][0]
+            if not isinstance(meta, dict) or not isinstance(wireguard, dict):
+                raise ValueError("invalid server entry")
+            geo_value = item.get("geo", False)
+            if not isinstance(geo_value, bool):
+                raise ValueError("invalid geo flag")
+            region_id = _reject_control_text(item.get("id"), "region id", max_length=128)
+            name = _reject_control_text(item.get("name"), "region name", max_length=256)
             regions.append(
                 Region(
-                    region_id=str(item["id"]),
-                    name=str(item["name"]),
-                    meta_ip=str(meta["ip"]),
-                    wireguard_ip=str(wireguard["ip"]),
-                    wireguard_hostname=str(wireguard["cn"]),
-                    geo=bool(item.get("geo", False)),
+                    region_id=region_id,
+                    name=name,
+                    meta_ip=_validate_ip(meta.get("ip"), "metadata server IP"),
+                    wireguard_ip=_validate_ip(wireguard.get("ip"), "WireGuard server IP"),
+                    wireguard_hostname=_validate_hostname(wireguard.get("cn"), "WireGuard certificate hostname"),
+                    geo=geo_value,
                 )
             )
-        except (KeyError, IndexError, TypeError):
+        except (KeyError, IndexError, TypeError, ValueError, PiaError):
             malformed_entries += 1
 
     if not regions:
@@ -144,7 +247,7 @@ def measure_latencies(
     return measured
 
 
-def authenticate(credentials: Credentials, timeout: float = 20.0) -> str:
+def authenticate(credentials: "Credentials", timeout: float = 20.0) -> str:
     try:
         response = requests.post(
             TOKEN_URL,
@@ -194,13 +297,15 @@ def authenticate(credentials: Credentials, timeout: float = 20.0) -> str:
             details=str(exc),
         ) from exc
 
-    token = str(payload.get("token", "")).strip()
-    if not token:
+    try:
+        token = _reject_control_text(payload.get("token"), "PIA token", max_length=4096)
+        token.encode("ascii")
+    except (PiaError, UnicodeEncodeError) as exc:
         raise PiaError(
             "error.no_token.title",
             "error.no_token.message",
-            details=json.dumps(payload, ensure_ascii=False)[:1000],
-        )
+            details="PIA returned an empty or invalid token.",
+        ) from exc
     return token
 
 
@@ -258,6 +363,15 @@ def _generate_wireguard_keys() -> tuple[str, str]:
             "error.wg_public.message",
             details=(public_result.stderr or public_result.stdout).strip(),
         )
+    try:
+        private_key = _validate_wireguard_key(private_key, "generated WireGuard private key")
+        public_key = _validate_wireguard_key(public_key, "generated WireGuard public key")
+    except PiaError as exc:
+        raise PiaError(
+            "error.wg_public.title",
+            "error.wg_public.message",
+            details=exc.details,
+        ) from exc
     return private_key, public_key
 
 
@@ -269,6 +383,15 @@ def _request_wireguard_data(
     public_key: str,
     timeout: float = 20.0,
 ) -> dict[str, object]:
+    hostname = _validate_hostname(hostname, "WireGuard certificate hostname")
+    server_ip = _validate_ip(server_ip, "WireGuard server IP")
+    token = _reject_control_text(token, "PIA token", max_length=4096)
+    try:
+        token.encode("ascii")
+    except UnicodeEncodeError as exc:
+        raise _pia_validation_error("PIA token contains non-ASCII characters.") from exc
+    public_key = _validate_wireguard_key(public_key, "WireGuard public key")
+
     ca_path = _resource_path("pia-ca.rsa.4096.crt")
     if not ca_path.is_file():
         raise PiaError(
@@ -298,7 +421,7 @@ def _request_wireguard_data(
                     f"GET /addKey?{query} HTTP/1.1\r\n"
                     f"Host: {hostname}:{WIREGUARD_PORT}\r\n"
                     "Accept: application/json\r\n"
-                    "User-Agent: PIA-Bazzite/0.4\r\n"
+                    f"User-Agent: PIA-Bazzite/{__version__}\r\n"
                     "Connection: close\r\n\r\n"
                 )
                 tls_socket.sendall(request.encode("ascii"))
@@ -340,28 +463,40 @@ def _request_wireguard_data(
             details=str(exc),
         ) from exc
 
+    if not isinstance(payload, dict):
+        raise _pia_validation_error("PIA WireGuard registration response is not an object.")
     if payload.get("status") != "OK":
+        message = payload.get("message", "Unknown PIA error")
         raise PiaError(
             "error.wg_rejected.title",
             "error.wg_rejected.message",
-            details=str(payload.get("message", "Unknown PIA error")),
+            details=str(message)[:500],
         )
 
     required_fields = ("peer_ip", "server_key", "server_port", "dns_servers")
-    missing = [field for field in required_fields if not payload.get(field)]
+    missing = [field for field in required_fields if field not in payload or payload[field] in (None, "", [])]
     if missing:
         raise PiaError(
             "error.wg_incomplete.title",
             "error.wg_incomplete.message",
             details="Missing fields: " + ", ".join(missing),
         )
-    return payload
+    dns_servers = payload["dns_servers"]
+    if not isinstance(dns_servers, list) or not 1 <= len(dns_servers) <= 8:
+        raise _pia_validation_error("PIA DNS server list is invalid.")
+    return {
+        **payload,
+        "peer_ip": _validate_interface_address(payload["peer_ip"], "WireGuard peer IP"),
+        "server_key": _validate_wireguard_key(payload["server_key"], "WireGuard server key"),
+        "server_port": _validate_port(payload["server_port"], "WireGuard server port"),
+        "dns_servers": [_validate_ip(value, "PIA DNS server") for value in dns_servers],
+    }
 
 
 def create_wireguard_config(
     *,
     config_path: Path,
-    credentials: Credentials,
+    credentials: "Credentials",
     region: Region,
 ) -> None:
     token = authenticate(credentials)
@@ -380,6 +515,7 @@ def create_wireguard_config(
             "error.dns_missing.message",
         )
 
+    endpoint_ip = _validate_ip(region.wireguard_ip, "WireGuard endpoint IP")
     config_path.parent.mkdir(parents=True, exist_ok=True)
     config = (
         "[Interface]\n"
@@ -390,13 +526,36 @@ def create_wireguard_config(
         "PersistentKeepalive = 25\n"
         f"PublicKey = {payload['server_key']}\n"
         "AllowedIPs = 0.0.0.0/0\n"
-        f"Endpoint = {region.wireguard_ip}:{payload['server_port']}\n"
+        f"Endpoint = {endpoint_ip}:{payload['server_port']}\n"
     )
 
+    temporary = config_path.with_name(
+        f".{config_path.name}.{os.getpid()}.{secrets.token_hex(6)}.tmp"
+    )
     try:
-        config_path.write_text(config, encoding="utf-8")
+        if config_path.exists() or config_path.is_symlink():
+            metadata = config_path.lstat()
+            if config_path.is_symlink() or not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
+                raise OSError(f"Refusing unsafe WireGuard config target: {config_path}")
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+        if hasattr(os, "O_NOFOLLOW"):
+            flags |= os.O_NOFOLLOW
+        fd = os.open(temporary, flags, 0o600)
+        try:
+            os.fchmod(fd, 0o600)
+            with os.fdopen(fd, "w", encoding="utf-8", closefd=False) as handle:
+                handle.write(config)
+                handle.flush()
+                os.fsync(handle.fileno())
+        finally:
+            os.close(fd)
+        os.replace(temporary, config_path)
         config_path.chmod(0o600)
     except OSError as exc:
+        try:
+            temporary.unlink(missing_ok=True)
+        except OSError:
+            pass
         raise PiaError(
             "error.config_write.title",
             "error.config_write.message",
@@ -422,12 +581,21 @@ def fetch_public_network_info(timeout: float = 10.0) -> PublicNetworkInfo:
             details=str(exc),
         ) from exc
 
-    ip_address = str(payload.get("ip", "")).strip()
-    country_code = str(payload.get("country", "")).strip().upper()
-    if not ip_address:
+    if not isinstance(payload, dict):
         raise PiaError(
             "error.public_ip.title",
             "error.public_ip.message",
-            details=json.dumps(payload, ensure_ascii=False)[:500],
+            details="Public-IP service returned a non-object response.",
         )
+    try:
+        ip_address = _validate_ip(payload.get("ip"), "public IP")
+        country_code = _reject_control_text(payload.get("country"), "country code", max_length=2).upper()
+        if not re.fullmatch(r"[A-Z]{2}", country_code):
+            raise _pia_validation_error("country code is invalid")
+    except PiaError as exc:
+        raise PiaError(
+            "error.public_ip.title",
+            "error.public_ip.message",
+            details=exc.details,
+        ) from exc
     return PublicNetworkInfo(ip_address=ip_address, country_code=country_code)

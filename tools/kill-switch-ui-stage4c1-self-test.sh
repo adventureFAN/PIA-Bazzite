@@ -55,7 +55,7 @@ PYTHONPATH="$ROOT/helper:$ROOT" python3 -m unittest discover \
   -s "$ROOT/tests/polkit" -p 'test_*.py' -v
 printf '\n'
 
-printf '%s\n' '--- Existing PIA Bazzite v0.5.0 regression self-test ---'
+printf '%s\n' '--- Existing PIA Bazzite release regression self-test ---'
 python3 "$ROOT/self_test.py"
 printf '\nALL STAGE-4C.1 RUNTIME UI-POLISH SELF-TESTS PASSED\n'
 printf 'Report: %s\n' "$REPORT"

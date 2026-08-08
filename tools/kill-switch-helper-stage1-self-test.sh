@@ -36,7 +36,7 @@ printf '%s\n' '--- Restricted helper unit tests ---'
 "$PYTHON" -m unittest discover -s tests/helper -v
 printf '\n'
 
-printf '%s\n' '--- Existing PIA Bazzite v0.5.0 regression self-test ---'
+printf '%s\n' '--- Existing PIA Bazzite release regression self-test ---'
 "$PYTHON" self_test.py
 printf '\nALL STAGE-1 SELF-TESTS PASSED\n'
 printf 'Report: %s\n' "$REPORT"

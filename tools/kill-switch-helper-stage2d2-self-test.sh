@@ -46,7 +46,7 @@ PYTHONPATH="$ROOT" python3 -m unittest discover -s "$ROOT/tests/helper" -v
 PYTHONPATH="$ROOT" python3 -m unittest discover -s "$ROOT/tests/polkit" -v
 printf '\n'
 
-printf '%s\n' '--- Existing PIA Bazzite v0.5.0 regression self-test ---'
+printf '%s\n' '--- Existing PIA Bazzite release regression self-test ---'
 "$ROOT/.venv/bin/python" "$ROOT/self_test.py"
 printf '\n'
 

@@ -72,7 +72,7 @@ PYTHONPATH="$ROOT/helper:$ROOT" python3 -m unittest discover \
   -s "$ROOT/tests/polkit" -p 'test_*.py' -v
 printf '\n'
 
-printf '%s\n' '--- Existing PIA Bazzite v0.5.0 regression self-test ---'
+printf '%s\n' '--- Existing PIA Bazzite release regression self-test ---'
 python3 "$ROOT/self_test.py"
 printf '\nALL STAGE-6C.2 EMERGENCY-RESET RECOVERY SELF-TESTS PASSED\n'
 printf 'No host firewall, VPN connection, GUI session, or physical-path sentinel was changed by this self-test.\n'

@@ -164,6 +164,29 @@ class KillSwitchSessionClientTests(unittest.TestCase):
 
     @patch("pia_bazzite.kill_switch_client.Path.is_symlink", return_value=False)
     @patch("pia_bazzite.kill_switch_client.Path.lstat")
+    def test_open_replaces_cached_ready_frame_after_broker_exit(self, lstat, is_symlink):
+        class Meta:
+            st_mode = 0o100755
+            st_uid = 0
+            st_gid = 0
+            st_nlink = 1
+        lstat.return_value = Meta()
+        transport = FakeTransport()
+        temporary, client = self.make_client(transport)
+        with temporary:
+            first = client.open()
+            transport.alive = False
+            transport.session_pid = 4343
+            second = client.open()
+        self.assertEqual(first.session_pid, 4242)
+        self.assertEqual(second.session_pid, 4343)
+        self.assertIsNot(first, second)
+        self.assertEqual(len(transport.starts), 2)
+        self.assertEqual(transport.closed, 1)
+        self.assertTrue(client.is_open)
+
+    @patch("pia_bazzite.kill_switch_client.Path.is_symlink", return_value=False)
+    @patch("pia_bazzite.kill_switch_client.Path.lstat")
     def test_authorization_denial_occurs_only_during_open(self, lstat, is_symlink):
         class Meta:
             st_mode = 0o100755

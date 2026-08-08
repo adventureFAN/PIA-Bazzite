@@ -45,7 +45,7 @@ fixed `inet pia_bazzite_killswitch` table.
 For an immediate deliberate recovery:
 
 ```bash
-cd /home/alex/PIA-Bazzite
+cd $HOME/PIA-Bazzite
 bash tools/kill-switch-recovery-stage6b-emergency-reset.sh
 ```
 

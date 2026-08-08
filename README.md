@@ -13,10 +13,15 @@ and does not require PIA's `manual-connections` repository.
 - Connect, disconnect, and switch PIA locations.
 - Measure locations and sort them by latency.
 - Choose the fastest location automatically.
-- Quick access to ten low-latency locations from the system tray.
+- Quick access to up to 20 low-latency locations from the system tray.
 - Native NetworkManager and Plasma notification integration.
 - Public IP and detected country display.
-- Temporary IPv6 blackhole protection while connected.
+- Optional fail-closed Session Kill Switch for IPv4, IPv6, and direct DNS paths.
+- Protected reconnect and server switching while the Kill Switch remains active.
+- Crash-safe recovery and verified automatic takeover after an application restart.
+- Integrated VPN-first **Reset Kill Switch Protection** recovery for deliberate
+  release from a stuck blocked/error state.
+- Verified IPv6-only firewall protection while connected when the Session Kill Switch is disabled.
 - PIA DNS configuration in the WireGuard profile.
 - Secure credential storage through the Linux Secret Service keyring.
 - English and German user interfaces.
@@ -24,12 +29,28 @@ and does not require PIA's `manual-connections` repository.
 - Optional live log with secret redaction and IP masking.
 - Single-instance behavior and XDG-compliant storage locations.
 
+### Public-IP lookup privacy
+
+The Public IP / country display uses `https://api.country.is/`. PIA Bazzite does
+not automatically query that service while the VPN is verified disconnected.
+While disconnected, the lookup is performed only when you explicitly use the
+public-IP refresh control. Automatic refreshes are limited to a verified VPN
+connection.
+
 ## Important limitations
 
-PIA Bazzite currently has **no kill switch**. If the VPN tunnel drops
-unexpectedly, normal internet traffic may resume outside the VPN.
+The optional Kill Switch is a **session Kill Switch**. It is designed to remain
+fail-closed across tunnel loss and application crashes, but it is not a persistent
+early-boot firewall and is not intended to survive a full system reboot.
 
-It also does not provide:
+While the Session Kill Switch is active, Bazzite/KDE may temporarily report the
+underlying network as **Limited connectivity**. This can happen because
+NetworkManager's own connectivity probe is not allowed to bypass the VPN through
+the physical interface. It does not by itself mean that the PIA tunnel is down.
+After an intentional disconnect and firewall release, the indicator may remain
+limited briefly until NetworkManager performs its next connectivity check.
+
+PIA Bazzite also does not provide:
 
 - split tunneling;
 - port forwarding;
@@ -38,13 +59,43 @@ It also does not provide:
 
 ## Recommended installation: AppImage
 
-1. Download `PIA-Bazzite-0.5.0-x86_64.AppImage` from the GitHub release.
+1. Download `PIA-Bazzite-0.6.0-x86_64.AppImage` from the GitHub release.
 2. Integrate it with **Gear Lever**, or mark it executable and launch it.
 3. Enter your PIA username and password on first start.
 4. Choose a location and connect.
 
 The AppImage includes Python, Qt/PySide6, and the Python dependencies. It
-still uses Bazzite's own NetworkManager and WireGuard support.
+still uses Bazzite's own NetworkManager and WireGuard support. Normal VPN
+connections use a narrow IPv6-only `nftables` guard so native IPv6 cannot bypass
+the PIA tunnel; the optional Session Kill Switch uses a separate, stronger
+fail-closed firewall. Both are managed by the same restricted root-owned system
+component after administrator authorization.
+
+### Why PIA Bazzite blocks IPv6 while connected
+
+The WireGuard parameters currently provisioned to PIA Bazzite by PIA provide an
+IPv4 tunnel address and IPv4 default route, but no IPv6 `AllowedIPs` route for
+tunneled IPv6. PIA Bazzite therefore blocks native IPv6 while the VPN is active
+rather than allowing IPv6 to leave through the physical network outside the VPN.
+This does not disable IPv6 permanently: after an intentional VPN disconnect,
+the guard is removed and the system's normal IPv6 connectivity is restored.
+
+### Reset Kill Switch Protection
+
+When a safely blocked or protection-error state has a known PIA Bazzite Kill
+Switch firewall, **Help → Reset Kill Switch Protection…** becomes available as
+a deliberate recovery action. The app first stops the PIA WireGuard profile and
+independently verifies that the VPN is down. The Kill Switch firewall remains in
+place during that verification. Only then may the fixed installed helper remove
+PIA Bazzite's own `pia_bazzite_killswitch` table. The helper verifies that the
+table is absent before the crash-recovery record is cleaned up. Other firewall
+tables are not modified, and the Kill Switch preference remains enabled for the
+next VPN connection.
+
+After a successful reset, normal networking is restored **without VPN
+protection**, so the user's real public IP address may be visible. If VPN-down
+or firewall absence cannot be verified, the reset fails closed and does not
+claim that normal networking has been restored.
 
 ## Run from source
 
@@ -63,7 +114,7 @@ chmod +x setup.sh run.sh self_test.py
 |---|---|
 | Exit | `Ctrl+Q` |
 | Connect / disconnect | `Ctrl+Shift+V` |
-| Reload server list | `Ctrl+R` |
+| Refresh server list | `Ctrl+R` |
 | Refresh pings | `Ctrl+P` |
 | Check public IP | `Ctrl+I` |
 | System check | `F5` |
@@ -83,7 +134,7 @@ application log.
 ## Building the AppImage
 
 The release workflow builds on Ubuntu 22.04 and creates the x86_64
-AppImage automatically when a version tag such as `v0.5.0` is pushed.
+AppImage automatically when a version tag such as `v0.6.0` is pushed.
 
 A local build is also available:
 
@@ -100,6 +151,11 @@ On Bazzite, the recommended reproducible local build uses Podman and Ubuntu
 
 The finished AppImage and its SHA-256 checksum are written to `dist/`.
 The build requires internet access and an x86_64 build machine.
+
+## Project credits
+
+Project direction, feature design, testing, and release decisions: **adventureFAN**  
+Most implementation, debugging, and technical documentation: developed collaboratively with **ChatGPT**
 
 ## License
 

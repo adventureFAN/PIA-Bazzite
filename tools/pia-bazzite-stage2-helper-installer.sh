@@ -52,10 +52,14 @@ check_safe_directory() {
 }
 
 check_source_file() {
-  local path="$1"
+  local path="$1" require_root_owner="${2:-no}"
   [ -f "$path" ] || fail "Source file is missing: $path"
   [ ! -L "$path" ] || fail "Source file must not be a symbolic link: $path"
   [ "$(stat -c '%h' -- "$path")" -eq 1 ] || fail "Source file has multiple hard links: $path"
+  if [ "$require_root_owner" = yes ]; then
+    [ "$(stat -c '%u:%g' -- "$path")" = "0:0" ] \
+      || fail "Packaged source is not owned by root:root: $path"
+  fi
 }
 
 check_existing_target_file() {
@@ -98,12 +102,96 @@ ensure_directories() {
   fi
 }
 
+verify_packaged_source() {
+  local root="$1" expected_digest="$2" actual_digest mode
+  [[ "$expected_digest" =~ ^[0-9a-f]{64}$ ]] || fail "Trusted packaged manifest digest is invalid."
+  [[ "$root" == /run/pia-bazzite-helper-root-* ]] \
+    || fail "Packaged helper source is outside the root-owned /run staging namespace."
+  check_safe_directory "$root"
+  mode="$(stat -c '%a' -- "$root")"
+  [ "$mode" = 700 ] || fail "Packaged helper staging root must have mode 0700."
+
+  check_source_file "$root/bundle-manifest.json" yes
+  [ "$(stat -c '%a' -- "$root/bundle-manifest.json")" = 644 ] \
+    || fail "Packaged helper manifest must have mode 0644."
+  actual_digest="$(sha256sum -- "$root/bundle-manifest.json" | awk '{print $1}')"
+  [ "$actual_digest" = "$expected_digest" ] \
+    || fail "Packaged helper manifest does not match the trusted AppImage digest."
+
+  /usr/bin/python3 -I - "$root" "$expected_digest" <<'PY'
+from __future__ import annotations
+
+import hashlib
+import json
+from pathlib import Path
+import re
+import stat
+import sys
+
+root = Path(sys.argv[1]).resolve(strict=True)
+trusted_digest = sys.argv[2]
+manifest_path = root / "bundle-manifest.json"
+if hashlib.sha256(manifest_path.read_bytes()).hexdigest() != trusted_digest:
+    raise SystemExit("ERROR: Packaged helper manifest digest changed during privileged validation.")
+document = json.loads(manifest_path.read_text(encoding="utf-8"))
+required = {"schema_version", "app_version", "helper_stage", "protocol_version", "files"}
+if not isinstance(document, dict) or set(document) != required:
+    raise SystemExit("ERROR: Packaged helper bundle manifest shape is invalid.")
+if document.get("schema_version") != 1 or document.get("helper_stage") != 5 or document.get("protocol_version") != 1:
+    raise SystemExit("ERROR: Packaged helper bundle compatibility metadata is invalid.")
+if not isinstance(document.get("app_version"), str) or not document["app_version"]:
+    raise SystemExit("ERROR: Packaged helper bundle app version is invalid.")
+files = document.get("files")
+expected = {
+    "tools/pia-bazzite-stage2-helper-installer.sh": 0o755,
+    "helper/pia-bazzite-kill-switch-helper-installed": 0o755,
+    "helper/pia-bazzite-kill-switch-session-installed": 0o755,
+    "helper/pia_bazzite_kill_switch_helper/__init__.py": 0o644,
+    "helper/pia_bazzite_kill_switch_helper/cli.py": 0o644,
+    "helper/pia_bazzite_kill_switch_helper/core.py": 0o644,
+    "helper/pia_bazzite_kill_switch_helper/runner.py": 0o644,
+    "helper/pia_bazzite_kill_switch_helper/protocol.py": 0o644,
+    "helper/pia_bazzite_kill_switch_helper/installed_entry.py": 0o644,
+    "helper/pia_bazzite_kill_switch_helper/session_entry.py": 0o644,
+}
+if not isinstance(files, dict) or set(files) != set(expected):
+    raise SystemExit("ERROR: Packaged helper bundle file list is invalid.")
+for relative, expected_mode in expected.items():
+    path = root / relative
+    metadata = path.lstat()
+    if path.is_symlink() or not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
+        raise SystemExit(f"ERROR: Unsafe packaged helper source: {relative}")
+    if metadata.st_uid != 0 or metadata.st_gid != 0:
+        raise SystemExit(f"ERROR: Packaged helper source is not root-owned: {relative}")
+    if stat.S_IMODE(metadata.st_mode) != expected_mode:
+        raise SystemExit(f"ERROR: Wrong packaged helper source mode: {relative}")
+    expected_hash = files.get(relative)
+    if not isinstance(expected_hash, str) or not re.fullmatch(r"[0-9a-f]{64}", expected_hash):
+        raise SystemExit(f"ERROR: Invalid packaged helper source checksum: {relative}")
+    if hashlib.sha256(path.read_bytes()).hexdigest() != expected_hash:
+        raise SystemExit(f"ERROR: Packaged helper source checksum mismatch: {relative}")
+PY
+}
+
 install_helper() {
-  local root temporary source relative target source_hash target_hash session_hash
+  local mode="${1:-source}" trusted_digest="${2:-}" root temporary source relative source_hash target_hash session_hash require_root_source=no
   root="$(project_root)"
 
+  case "$mode" in
+    source)
+      if [ -e "$root/bundle-manifest.json" ] || [ -L "$root/bundle-manifest.json" ]; then
+        fail "Source-tree install refuses packaged bundle metadata; downgrade to source mode is forbidden."
+      fi
+      ;;
+    packaged)
+      require_root_source=yes
+      verify_packaged_source "$root" "$trusted_digest"
+      ;;
+    *) fail "Invalid helper installation mode." ;;
+  esac
+
   for relative in "${SOURCE_FILES[@]}"; do
-    check_source_file "$root/$relative"
+    check_source_file "$root/$relative" "$require_root_source"
   done
 
   /usr/bin/python3 -I - "$root" <<'PY'
@@ -305,8 +393,9 @@ show_status() {
 require_root
 acquire_lock
 case "${1:-}" in
-  install) install_helper ;;
+  install) install_helper source ;;
+  install-packaged) install_helper packaged "${2:-}" ;;
   uninstall) uninstall_helper ;;
   status) show_status ;;
-  *) fail "Usage: $0 {install|uninstall|status}" ;;
+  *) fail "Usage: $0 {install|install-packaged SHA256|uninstall|status}" ;;
 esac

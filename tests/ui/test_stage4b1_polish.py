@@ -33,7 +33,7 @@ class Stage4B1PolishStaticTests(unittest.TestCase):
         source = GUI.read_text(encoding="utf-8")
         self.assertIn("self.ip_refresh_button = QToolButton()", source)
         self.assertIn('self.ip_refresh_button.setText("↻")', source)
-        self.assertIn("self.ip_refresh_button.setFixedSize(28, 24)", source)
+        self.assertIn("self.ip_refresh_button.setFixedSize(24, 22)", source)
 
     def test_main_window_width_is_reduced_without_height_change(self) -> None:
         source = GUI.read_text(encoding="utf-8")
@@ -66,7 +66,8 @@ class Stage4B1PolishStaticTests(unittest.TestCase):
             "window.log_view.lineWrapMode()",
             "window.log_view.horizontalScrollBarPolicy()",
             "window.ip_refresh_button.size()",
-            "window.size()",
+            "window._expanded_log_size()",
+            "button_top < log_bottom",
         ):
             self.assertIn(expected, source)
 

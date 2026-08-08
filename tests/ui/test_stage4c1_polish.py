@@ -67,10 +67,14 @@ class Stage4C1PolishTests(unittest.TestCase):
         self.assertIn("COMPACT_SIZE = QSize(740, 510)", source)
         self.assertIn("LOG_SIZE = QSize(760, 780)", source)
 
-    def test_runtime_preview_checks_wrapped_tooltips_and_new_width(self) -> None:
+    def test_runtime_preview_checks_wrapped_tooltips_and_dynamic_log_layout(self) -> None:
         source = PREVIEW.read_text(encoding="utf-8")
         self.assertIn('if "\\n" not in tooltip:', source)
-        self.assertIn("window.size() != QSize(760, 780)", source)
+        self.assertIn("expected_size = window._expanded_log_size()", source)
+        self.assertIn("window.height() < LOG_SIZE.height()", source)
+        self.assertIn("button_top < log_bottom", source)
+        self.assertNotIn("window.size() != QSize(760, 780)", source)
+
 
 
 if __name__ == "__main__":

@@ -1,8 +1,13 @@
 # -*- mode: python ; coding: utf-8 -*-
 from pathlib import Path
 from PyInstaller.utils.hooks import collect_submodules, copy_metadata
+import PySide6
 
 root = Path.cwd().resolve()
+qt_translations = Path(PySide6.__file__).resolve().parent / "Qt" / "translations"
+qtbase_de = qt_translations / "qtbase_de.qm"
+if not qtbase_de.is_file():
+    raise FileNotFoundError(f"Required Qt German translation not found: {qtbase_de}")
 
 hiddenimports = [
     "keyring.backends.SecretService",
@@ -12,6 +17,8 @@ hiddenimports = [
 
 datas = [
     (str(root / "pia_bazzite" / "resources"), "pia_bazzite/resources"),
+    (str(root / "THIRD_PARTY_NOTICES.md"), "pia_bazzite/resources"),
+    (str(qtbase_de), "PySide6/Qt/translations"),
     *copy_metadata("keyring"),
     *copy_metadata("SecretStorage"),
     *copy_metadata("requests"),

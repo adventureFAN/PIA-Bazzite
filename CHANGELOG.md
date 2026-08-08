@@ -2,6 +2,25 @@
 
 All notable changes to PIA Bazzite are documented in this file.
 
+## [0.6.0] - 2026-08-08
+
+### Added
+
+- Optional fail-closed Session Kill Switch using a restricted root-owned helper.
+- Firewall-first protected connect and VPN-first verified disconnect ordering.
+- Protected automatic reconnect and server switching without direct-path fallback.
+- Crash-recovery journal and verified automatic takeover after an application crash.
+- Adversarial recovery refusal and an integrated VPN-first Reset Kill Switch Protection recovery path.
+- Independent IPv4, IPv6, DNS/TCP, and DNS/UDP leak-sentinel host tests.
+- Separate verified IPv6-only nftables guard for normal VPN connections without the Session Kill Switch.
+- User-facing documentation of why native IPv6 is blocked instead of tunneled with the currently provisioned PIA WireGuard parameters.
+
+### Changed
+
+- Protection status is reconciled automatically on startup when persisted recovery hints indicate that a production Kill Switch firewall may remain active.
+- AppImage packaging carries the exact versioned helper payload for authenticated installation and normal-VPN IPv6 protection.
+- Release metadata and automation target version 0.6.0.
+
 ## [0.5.0] - 2026-08-03
 
 ### Added
@@ -28,8 +47,8 @@ All notable changes to PIA Bazzite are documented in this file.
 
 - Native NetworkManager WireGuard connections.
 - Location search, latency measurements, fastest-location selection, and
-  ten quick tray locations.
-- Temporary IPv6 protection while connected.
+  up to 20 quick tray locations.
+- Firewall-backed IPv6 protection while connected.
 - Secure Secret Service credential storage.
 - English and German user interfaces.
 - Live log, theme selection, system checks, and detailed connection status.

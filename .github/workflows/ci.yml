@@ -12,11 +12,50 @@ jobs:
   self-test:
     runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.10"
-      - name: Run static self-test
-        run: python self_test.py
-      - name: Validate XML
-        run: python -c "import xml.etree.ElementTree as ET; ET.parse('packaging/io.github.adventurefan.PIABazzite.metainfo.xml')"
+          cache: "pip"
+
+      - name: Install test runtime
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends \
+            libdbus-1-3 \
+            libegl1 \
+            libfontconfig1 \
+            libgl1 \
+            libglib2.0-0 \
+            libice6 \
+            libnss3 \
+            libopengl0 \
+            libsm6 \
+            libx11-6 \
+            libx11-xcb1 \
+            libxcb1 \
+            libxcb-cursor0 \
+            libxcb-icccm4 \
+            libxcb-image0 \
+            libxcb-keysyms1 \
+            libxcb-randr0 \
+            libxcb-render-util0 \
+            libxcb-shape0 \
+            libxcb-shm0 \
+            libxcb-sync1 \
+            libxcb-util1 \
+            libxcb-xfixes0 \
+            libxcb-xinerama0 \
+            libxcb-xkb1 \
+            libxext6 \
+            libxkbcommon0 \
+            libxkbcommon-x11-0 \
+            libxrender1
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+
+      - name: Run authoritative unprivileged release gate
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: bash tools/release-unprivileged-gate.sh

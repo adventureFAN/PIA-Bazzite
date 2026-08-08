@@ -20,7 +20,7 @@ Before testing:
 - Optionally open a second terminal with this command ready:
 
   ```bash
-  cd /home/alex/PIA-Bazzite
+  cd $HOME/PIA-Bazzite
   ./tools/kill-switch-emergency-reset.sh
   ```
 

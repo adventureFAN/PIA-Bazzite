@@ -25,9 +25,22 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
-## Python and bundled Python packages
+## Python, Qt/PySide, and bundled Python packages
 
-The AppImage bundles CPython and third-party Python packages. Their license
-files are collected into the AppImage build where supplied by the installed
-distributions. The authoritative license terms remain those published by each
-upstream project.
+The AppImage bundles CPython, Qt/PySide6 and the Python runtime dependency tree
+used by PIA Bazzite. During every AppImage build, PIA Bazzite generates
+`usr/share/doc/pia-bazzite/third-party-python/COMPONENTS.txt` from the exact
+installed build environment and copies license, COPYING, NOTICE and AUTHORS
+files when the installed distribution supplies them. Per-component package
+metadata is stored beside those files.
+
+PySide6-Essentials package metadata declares the open-source alternatives
+`LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only`. Because wheel metadata does
+not consistently expose the corresponding open-source license text files, the
+AppImage also ships pinned copies of the canonical GNU LGPLv3, GPLv3 and GPLv2
+texts under `third-party-python/PySide6-Qt/`. This avoids making release
+compliance depend on a wheel-layout detail.
+
+This generated and bundled material is provided to make the contents of the
+binary package inspectable. The authoritative license terms remain those
+published and shipped by each upstream project.

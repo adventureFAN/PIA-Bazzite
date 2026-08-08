@@ -67,7 +67,7 @@ closes, the request limit is reached, or the timeout expires.
 Run:
 
 ```bash
-cd /home/alex/PIA-Bazzite
+cd $HOME/PIA-Bazzite
 bash tools/kill-switch-connection-stage5c-self-test.sh
 ```
 

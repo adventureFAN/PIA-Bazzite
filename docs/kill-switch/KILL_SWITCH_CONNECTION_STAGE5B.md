@@ -28,7 +28,7 @@ validated and only the fixed ruleset can be rendered.
 Run:
 
 ```bash
-cd /home/alex/PIA-Bazzite
+cd $HOME/PIA-Bazzite
 bash tools/kill-switch-connection-stage5b-self-test.sh
 ```
 
@@ -54,7 +54,7 @@ Prerequisites:
 Run:
 
 ```bash
-cd /home/alex/PIA-Bazzite
+cd $HOME/PIA-Bazzite
 bash tools/kill-switch-connection-stage5b-host-test.sh
 ```
 
@@ -103,7 +103,7 @@ Use only when the host test reports that the production firewall may still be
 active, or when normal internet remains blocked after the test:
 
 ```bash
-cd /home/alex/PIA-Bazzite
+cd $HOME/PIA-Bazzite
 bash tools/kill-switch-connection-stage5b-emergency-reset.sh
 ```
 

@@ -39,6 +39,7 @@ from PySide6.QtWidgets import (
     QToolButton,
     QSizePolicy,
     QSystemTrayIcon,
+    QTextBrowser,
     QVBoxLayout,
     QWidget,
 )
@@ -46,10 +47,23 @@ from PySide6.QtWidgets import (
 from . import __app_id__, __version__, network_manager
 from .app_errors import AppError, friendly_error
 from .credentials import CredentialStore, Credentials
+from .emergency_reset import EmergencyResetResult, run_verified_emergency_reset
 from .i18n import language, set_language, tr
+from .host_open import open_host_target
+from .helper_installation import (
+    HelperInstallationAudit,
+    HelperInstallationState,
+    PackagedHelperManager,
+)
 from .icons import status_dot_icon, status_icon, system_status_icon
 from .logging_utils import mask_ip_address, redact_secrets
-from .kill_switch_client import KillSwitchClient, KillSwitchClientError, KillSwitchStatus
+from .kill_switch_client import (
+    AuthorizationDeniedError,
+    IPv6GuardStatus,
+    KillSwitchClient,
+    KillSwitchClientError,
+    KillSwitchStatus,
+)
 from .kill_switch_crash_state import (
     CrashRecoveryDecision,
     CrashRecoveryDisposition,
@@ -81,10 +95,20 @@ from .kill_switch_recovery import (
 from .kill_switch_runtime import KillSwitchRuntimeController
 from .kill_switch_session import KillSwitchSessionClient
 from .kill_switch_state import (
+    KillSwitchObservation,
     KillSwitchViewState,
+    derive_kill_switch_view_state,
     sample_kill_switch_states,
 )
 from .kill_switch_widgets import KillSwitchStatusWidget
+from .ipv6_guard_lifecycle import (
+    GuardStartupResult,
+    IPv6GuardConnectError,
+    IPv6GuardDisconnectError,
+    IPv6GuardLifecycle,
+    IPv6GuardLifecycleError,
+    IPv6GuardStartupError,
+)
 from .models import PublicNetworkInfo, Region, SystemCheck
 from .network_paths import discover_physical_interface
 from .network_probes import NetworkProbeBaseline, NetworkProbeError
@@ -110,6 +134,31 @@ from .workers import FunctionWorker
 FASTEST_ID = "__fastest__"
 COMPACT_SIZE = QSize(740, 510)
 LOG_SIZE = QSize(760, 780)
+REGION_POPUP_VISIBLE_ITEMS = 20
+PROJECT_URL = "https://github.com/adventureFAN/PIA-Bazzite"
+KILL_SWITCH_RECONCILIATION_REQUIRED_KEY = "kill_switch/reconciliation_required"
+
+
+class RegionComboBox(QComboBox):
+    """Combo box whose popup is capped to the first 20 visible rows on KDE too."""
+
+    def showPopup(self) -> None:
+        super().showPopup()
+        QTimer.singleShot(0, self._limit_popup_height)
+
+    def _limit_popup_height(self) -> None:
+        view = self.view()
+        visible = min(self.count(), REGION_POPUP_VISIBLE_ITEMS)
+        if visible <= 0:
+            return
+        fallback = max(24, view.fontMetrics().height() + 8)
+        height = sum(max(view.sizeHintForRow(row), fallback) for row in range(visible))
+        height += 2 * view.frameWidth() + 4
+        view.setMaximumHeight(height)
+        popup = view.window()
+        popup.setMaximumHeight(height)
+        if popup.height() > height:
+            popup.resize(popup.width(), height)
 
 
 _CONNECTION_EVENT_LOG_KEYS: dict[ConnectionPhase, str] = {
@@ -176,6 +225,45 @@ class _ProtectedDisconnectOutcome:
     session: KillSwitchSessionClient
     status: KillSwitchStatus
     events: tuple[ConnectionEvent, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class _NormalGuardConnectOutcome:
+    profile_uuid: str
+    session: KillSwitchSessionClient
+    status: IPv6GuardStatus
+
+
+@dataclass(frozen=True, slots=True)
+class _NormalGuardDisconnectOutcome:
+    session: KillSwitchSessionClient
+    status: IPv6GuardStatus
+
+
+@dataclass(frozen=True, slots=True)
+class _NormalGuardStartupOutcome:
+    session: KillSwitchSessionClient
+    result: GuardStartupResult
+
+
+class _IPv6GuardJobFailure(RuntimeError):
+    def __init__(
+        self,
+        cause: BaseException,
+        *,
+        session: KillSwitchSessionClient | None,
+        status: IPv6GuardStatus | None,
+        status_error: str = "",
+        guard_retained: bool = True,
+        vpn_connected: bool | None = None,
+    ) -> None:
+        super().__init__(str(cause))
+        self.cause = cause
+        self.session = session
+        self.status = status
+        self.status_error = status_error.strip()
+        self.guard_retained = bool(guard_retained)
+        self.vpn_connected = vpn_connected
 
 
 @dataclass(frozen=True, slots=True)
@@ -417,6 +505,109 @@ class QuitDialog(QDialog):
         self.accept()
 
 
+class ThirdPartyNoticesDialog(QDialog):
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle(tr("about.third_party_title"))
+        self.resize(720, 520)
+
+        view = QTextBrowser()
+        view.setOpenExternalLinks(True)
+        view.setMarkdown(self._read_notices())
+
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        close_button = buttons.button(QDialogButtonBox.StandardButton.Close)
+        if close_button is not None:
+            close_button.setText(tr("common.close"))
+        buttons.rejected.connect(self.reject)
+        buttons.accepted.connect(self.accept)
+
+        layout = QVBoxLayout(self)
+        layout.addWidget(view, 1)
+        layout.addWidget(buttons)
+
+    @staticmethod
+    def _read_notices() -> str:
+        candidates = (
+            Path(__file__).resolve().parent / "resources" / "THIRD_PARTY_NOTICES.md",
+            Path(__file__).resolve().parents[1] / "THIRD_PARTY_NOTICES.md",
+        )
+        for candidate in candidates:
+            try:
+                if candidate.is_file():
+                    return candidate.read_text(encoding="utf-8")
+            except OSError:
+                continue
+        return tr("about.third_party_unavailable")
+
+
+class AboutDialog(QDialog):
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle(tr("about.title"))
+        self.setMinimumWidth(570)
+
+        icon_label = QLabel()
+        icon_label.setPixmap(status_icon("application", 104).pixmap(104, 104))
+        icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        name_label = QLabel("PIA Bazzite")
+        name_font = name_label.font()
+        name_font.setPixelSize(24)
+        name_font.setBold(True)
+        name_label.setFont(name_font)
+        name_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        version_label = QLabel(tr("about.version", version=__version__))
+        version_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        description_label = QLabel(tr("about.description"))
+        description_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        description_label.setWordWrap(True)
+
+        license_label = QLabel(f"<i>{escape(tr('about.license'))}</i>")
+        license_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        developer_label = QLabel(tr("about.developer"))
+        developer_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        developer_label.setWordWrap(True)
+
+        disclaimer_label = QLabel(tr("about.disclaimer"))
+        disclaimer_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        disclaimer_label.setWordWrap(True)
+
+        project_button = QPushButton(tr("about.project_page"))
+        project_button.clicked.connect(lambda: open_host_target(PROJECT_URL))
+
+        notices_button = QPushButton(tr("about.third_party_notices"))
+        notices_button.clicked.connect(
+            lambda: ThirdPartyNoticesDialog(self).exec()
+        )
+
+        close_button = QPushButton(tr("common.close"))
+        close_button.clicked.connect(self.accept)
+
+        button_row = QHBoxLayout()
+        button_row.addWidget(project_button)
+        button_row.addWidget(notices_button)
+        button_row.addStretch()
+        button_row.addWidget(close_button)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(28, 24, 28, 22)
+        layout.setSpacing(12)
+        layout.addWidget(icon_label)
+        layout.addWidget(name_label)
+        layout.addWidget(version_label)
+        layout.addSpacing(4)
+        layout.addWidget(description_label)
+        layout.addWidget(license_label)
+        layout.addWidget(developer_label)
+        layout.addWidget(disclaimer_label)
+        layout.addSpacing(6)
+        layout.addLayout(button_row)
+
+
 class MainWindow(QMainWindow):
     def __init__(
         self,
@@ -442,7 +633,12 @@ class MainWindow(QMainWindow):
         )
         self._last_kill_switch_mode: str | None = None
         self._kill_switch_session: KillSwitchSessionClient | None = None
+        self._ipv6_guard_session: KillSwitchSessionClient | None = None
+        self._packaged_helper_manager = PackagedHelperManager.from_environment()
         self._kill_switch_status: KillSwitchStatus | None = None
+        self._ipv6_guard_status: IPv6GuardStatus | None = None
+        self._ipv6_guard_status_error = ""
+        self._ipv6_guard_release_scheduled = False
         self._kill_switch_status_error = ""
         self._kill_switch_probe_baseline: NetworkProbeBaseline | None = None
         self._kill_switch_route_plan: FirewallRoutePlan | None = None
@@ -467,6 +663,7 @@ class MainWindow(QMainWindow):
         self.public_info: PublicNetworkInfo | None = None
 
         self._connection_busy = False
+        self._intentional_disconnect_in_progress = False
         self._regions_busy = False
         self._public_info_busy = False
         self._last_connected_state: bool | None = None
@@ -479,6 +676,7 @@ class MainWindow(QMainWindow):
         self._allow_close = False
         self._close_hint_shown = False
         self._initial_setup_done = False
+        self._initial_region_refresh_pending = False
 
         # An empty per-window title lets KDE/Qt show only applicationDisplayName.
         self.setWindowTitle("")
@@ -527,8 +725,7 @@ class MainWindow(QMainWindow):
 
         QTimer.singleShot(0, self._first_start)
         QTimer.singleShot(75, self._reconcile_kill_switch_startup)
-        QTimer.singleShot(150, self.refresh_regions)
-        QTimer.singleShot(500, lambda: self.refresh_public_info(show_errors=False))
+        QTimer.singleShot(225, self._reconcile_ipv6_guard_startup)
 
     @staticmethod
     def _set_demi_bold(label: QLabel) -> None:
@@ -594,6 +791,10 @@ class MainWindow(QMainWindow):
         self.about_action = QAction(self)
         self.about_action.setShortcut(QKeySequence("F1"))
         self.about_action.triggered.connect(self.show_about)
+
+        self.emergency_reset_action = QAction(self)
+        self.emergency_reset_action.setVisible(False)
+        self.emergency_reset_action.triggered.connect(self.emergency_reset)
 
         self.english_action = QAction(self)
         self.english_action.setCheckable(True)
@@ -673,19 +874,20 @@ class MainWindow(QMainWindow):
         self.appearance_menu.addAction(self.light_theme_action)
         self.appearance_menu.addAction(self.dark_theme_action)
 
-        self.options_menu.addAction(self.kill_switch_action)
-
         self.quit_behavior_menu = self.options_menu.addMenu("")
         self.quit_behavior_menu.addAction(self.quit_ask_action)
         self.quit_behavior_menu.addAction(self.quit_disconnect_action)
         self.quit_behavior_menu.addAction(self.quit_leave_action)
 
+        self.options_menu.addAction(self.kill_switch_action)
         self.options_menu.addSeparator()
         self.options_menu.addAction(self.credentials_action)
         self.options_menu.addAction(self.live_log_action)
         self.options_menu.addAction(self.tray_action)
 
         self.help_menu = self.menuBar().addMenu("")
+        self.help_menu.addAction(self.emergency_reset_action)
+        self.help_menu.addSeparator()
         self.help_menu.addAction(self.about_action)
 
     def _create_main_ui(self) -> None:
@@ -718,7 +920,7 @@ class MainWindow(QMainWindow):
         self.ip_value = QLabel()
         self.ip_refresh_button = QToolButton()
         self.ip_refresh_button.setText("↻")
-        self.ip_refresh_button.setFixedSize(28, 24)
+        self.ip_refresh_button.setFixedSize(24, 22)
         self.ip_refresh_button.clicked.connect(
             lambda: self.refresh_public_info(show_errors=True)
         )
@@ -768,8 +970,9 @@ class MainWindow(QMainWindow):
         self.search_edit.textChanged.connect(self._populate_region_combo)
         connection_layout.addWidget(self.search_edit)
 
-        self.region_combo = QComboBox()
+        self.region_combo = RegionComboBox()
         self.region_combo.setMinimumHeight(38)
+        self.region_combo.setMaxVisibleItems(REGION_POPUP_VISIBLE_ITEMS)
         self.region_combo.currentIndexChanged.connect(self._selection_changed)
         connection_layout.addWidget(self.region_combo)
 
@@ -900,6 +1103,39 @@ class MainWindow(QMainWindow):
         self._kill_switch_status = status
         self._kill_switch_status_error = error.strip()
 
+    def _set_cached_ipv6_guard_status(
+        self,
+        status: IPv6GuardStatus | None,
+        *,
+        error: str = "",
+    ) -> None:
+        self._ipv6_guard_status = status
+        self._ipv6_guard_status_error = error.strip()
+
+    def _ipv6_guard_expected(self) -> bool:
+        return bool_value(
+            self.settings,
+            "connection/ipv6_guard_expected",
+            False,
+        )
+
+    def _set_ipv6_guard_expected(self, expected: bool) -> None:
+        if expected:
+            self.settings.setValue("connection/ipv6_guard_expected", True)
+        else:
+            self.settings.remove("connection/ipv6_guard_expected")
+        self.settings.sync()
+
+    def _close_ipv6_guard_session(self) -> None:
+        session = self._ipv6_guard_session
+        self._ipv6_guard_session = None
+        if session is None:
+            return
+        try:
+            session.close()
+        except Exception:
+            pass
+
     def _save_connected_crash_recovery_record(
         self,
         *,
@@ -935,6 +1171,7 @@ class MainWindow(QMainWindow):
                 details=str(exc),
             )
         else:
+            self._set_kill_switch_reconciliation_marker(False)
             self.log("ok", "log.kill_switch.crash_record.cleared")
 
     def _protected_reconnect_context_available(self) -> bool:
@@ -947,20 +1184,37 @@ class MainWindow(QMainWindow):
             and self._kill_switch_route_plan is not None
         )
 
+    def _kill_switch_reconciliation_marker_required(self) -> bool:
+        return bool_value(
+            self.settings,
+            KILL_SWITCH_RECONCILIATION_REQUIRED_KEY,
+            False,
+        )
+
+    def _set_kill_switch_reconciliation_marker(self, required: bool) -> None:
+        if required:
+            self.settings.setValue(KILL_SWITCH_RECONCILIATION_REQUIRED_KEY, True)
+        else:
+            self.settings.remove(KILL_SWITCH_RECONCILIATION_REQUIRED_KEY)
+        self.settings.sync()
+
     def _startup_kill_switch_reconciliation_required(self) -> bool:
         record_path = crash_recovery_path()
-        return self.kill_switch_runtime.feature_enabled or (
+        return self._kill_switch_reconciliation_marker_required() or (
             record_path.exists() or record_path.is_symlink()
         )
 
-    def _reconcile_kill_switch_startup(self) -> None:
+    def _reconcile_kill_switch_startup(self, *, _helper_checked: bool = False) -> None:
         """Adopt only an exactly verified crash-surviving protection state.
 
-        The startup check is automatic when the Kill Switch preference is
-        enabled or a recovery record exists.  It is read-only with respect to
-        NetworkManager and nftables: the only permitted mutation is clearing an
-        already validated stale record after the helper proves the table absent,
-        or rotating the record session ID after exact adoption.
+        The startup check is automatic only when a crash-recovery record or the
+        pre-firewall reconciliation marker says that a production firewall may
+        still exist.  Merely remembering the Kill Switch preference while the
+        VPN is cleanly disconnected does not require Polkit.  Reconciliation is
+        read-only with respect to NetworkManager and nftables: the only permitted
+        mutation is clearing already validated stale user state after the helper
+        proves the table absent, or rotating the record session ID after exact
+        adoption.
         """
 
         if (
@@ -968,6 +1222,13 @@ class MainWindow(QMainWindow):
             or self._connection_busy
             or not self._startup_kill_switch_reconciliation_required()
         ):
+            return
+
+        if not _helper_checked:
+            self._ensure_packaged_kill_switch_helper(
+                on_ready=lambda: self._reconcile_kill_switch_startup(_helper_checked=True),
+                on_cancel=self._mark_packaged_helper_unavailable_for_startup,
+            )
             return
 
         self._connection_busy = True
@@ -1043,14 +1304,10 @@ class MainWindow(QMainWindow):
                 )
                 self._update_controls()
                 self.update_connection_status(force=True)
-                self._show_error(
-                    AppError(
-                        "error.kill_switch_startup_recovery.title",
-                        "error.kill_switch_startup_recovery.message",
-                        details=(
-                            "The authenticated helper session ended before the "
-                            "crash-surviving protection state could be adopted."
-                        ),
+                self._show_startup_recovery_failure(
+                    details=(
+                        "The authenticated helper session ended before the "
+                        "crash-surviving protection state could be adopted."
                     )
                 )
                 return
@@ -1102,12 +1359,8 @@ class MainWindow(QMainWindow):
                 )
                 self._update_controls()
                 self.update_connection_status(force=True)
-                self._show_error(
-                    AppError(
-                        "error.kill_switch_startup_recovery.title",
-                        "error.kill_switch_startup_recovery.message",
-                        details=f"{type(exc).__name__}: {exc}",
-                    )
+                self._show_startup_recovery_failure(
+                    details=f"{type(exc).__name__}: {exc}"
                 )
                 return
 
@@ -1115,6 +1368,7 @@ class MainWindow(QMainWindow):
                 CrashRecoveryDisposition.NO_RECOVERY,
                 CrashRecoveryDisposition.CLEAR_STALE_RECORD,
             }:
+                self._set_kill_switch_reconciliation_marker(False)
                 self._kill_switch_probe_baseline = None
                 self._kill_switch_route_plan = None
                 self.settings.remove("connection/profile_uuid")
@@ -1129,6 +1383,7 @@ class MainWindow(QMainWindow):
             elif decision.adopted:
                 assert decision.route_plan is not None
                 assert decision.probe_baseline is not None
+                self._set_kill_switch_reconciliation_marker(True)
                 self.kill_switch_runtime.set_feature_enabled(True)
                 self.kill_switch_action.setChecked(True)
                 self._kill_switch_probe_baseline = decision.probe_baseline
@@ -1161,19 +1416,20 @@ class MainWindow(QMainWindow):
 
             self._update_controls()
             self.update_connection_status(force=True)
-            if decision.adopted or decision.disposition in {
-                CrashRecoveryDisposition.NO_RECOVERY,
-                CrashRecoveryDisposition.CLEAR_STALE_RECORD,
-            }:
+            self._release_initial_region_refresh_if_safe()
+            if (
+                decision.adopted
+                and self._last_connected_state is True
+            ):
                 self.refresh_public_info(show_errors=False)
-            else:
-                self._show_error(
-                    AppError(
-                        "error.kill_switch_startup_recovery.title",
-                        "error.kill_switch_startup_recovery.message",
-                        details=decision.reason,
-                    )
-                )
+            elif (
+                not decision.adopted
+                and decision.disposition not in {
+                    CrashRecoveryDisposition.NO_RECOVERY,
+                    CrashRecoveryDisposition.CLEAR_STALE_RECORD,
+                }
+            ):
+                self._show_startup_recovery_failure(details=decision.reason)
 
         def failure(error: BaseException) -> None:
             self._connection_busy = False
@@ -1200,12 +1456,8 @@ class MainWindow(QMainWindow):
             )
             self._update_controls()
             self.update_connection_status(force=True)
-            self._show_error(
-                AppError(
-                    "error.kill_switch_startup_recovery.title",
-                    "error.kill_switch_startup_recovery.message",
-                    details=f"{type(cause).__name__}: {cause}",
-                )
+            self._show_startup_recovery_failure(
+                details=f"{type(cause).__name__}: {cause}"
             )
 
         self._run_worker(job, on_success=success, on_failure=failure)
@@ -1228,7 +1480,7 @@ class MainWindow(QMainWindow):
             return
         try:
             connected = network_manager.is_connected()
-        except BaseException as exc:
+        except Exception as exc:
             self._show_error(exc)
             return
         if connected:
@@ -1292,10 +1544,11 @@ class MainWindow(QMainWindow):
             self._last_connected_state = False
             self._update_controls()
             self.update_connection_status(force=True)
+            self._release_initial_region_refresh_if_safe()
             if after_absent is not None:
                 after_absent()
                 return
-            self.refresh_public_info(show_errors=False)
+            self.public_info = None
             if announce_absent:
                 QMessageBox.information(
                     self,
@@ -1317,6 +1570,265 @@ class MainWindow(QMainWindow):
                     "error.kill_switch_status_recheck.title",
                     "error.kill_switch_status_recheck.message",
                     details=f"{type(error).__name__}: {error}",
+                )
+            )
+
+        self._run_worker(job, on_success=success, on_failure=failure)
+
+    def emergency_reset(self) -> None:
+        """Deliberately restore normal networking in VPN-first fail-closed order."""
+
+        if self._stage4_preview or self._connection_busy:
+            return
+
+        answer = QMessageBox.warning(
+            self,
+            tr("emergency_reset.confirm_title"),
+            tr("emergency_reset.confirm_message"),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Cancel,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+
+        self._connection_busy = True
+        self._update_controls()
+        self.log("warning", "log.kill_switch.emergency_reset.started")
+
+        def job() -> EmergencyResetResult:
+            return run_verified_emergency_reset(
+                client=KillSwitchClient(timeout=120.0),
+                vpn_backend=network_manager,
+                recovery_store=self._crash_recovery_journal.store,
+            )
+
+        def success(result: Any) -> None:
+            outcome = result
+            assert isinstance(outcome, EmergencyResetResult)
+            self._connection_busy = False
+            self._close_kill_switch_session()
+            self._set_cached_kill_switch_status(outcome.firewall_status)
+            self._kill_switch_probe_baseline = None
+            self._kill_switch_route_plan = None
+            self._set_kill_switch_reconciliation_marker(False)
+            self.settings.remove("connection/profile_uuid")
+            self.settings.sync()
+            self._last_connected_state = False
+            self.public_info = None
+            self.log("ok", "log.kill_switch.emergency_reset.completed")
+            self._update_controls()
+            self.update_connection_status(force=True)
+            self._release_initial_region_refresh_if_safe()
+            QMessageBox.information(
+                self,
+                tr("emergency_reset.complete_title"),
+                tr("emergency_reset.complete_message"),
+            )
+
+        def failure(error: BaseException) -> None:
+            self._connection_busy = False
+            self._set_cached_kill_switch_status(
+                self._kill_switch_status,
+                error=str(error),
+            )
+            self.log(
+                "error",
+                "log.kill_switch.emergency_reset.failed",
+                details=f"{type(error).__name__}: {error}",
+            )
+            self._update_controls()
+            self.update_connection_status(force=True)
+            self._show_error(
+                AppError(
+                    "emergency_reset.failed_title",
+                    "emergency_reset.failed_message",
+                    details=f"{type(error).__name__}: {error}",
+                )
+            )
+
+        self._run_worker(job, on_success=success, on_failure=failure)
+
+    def _startup_ipv6_guard_reconciliation_required(self) -> bool:
+        if self.kill_switch_runtime.feature_enabled:
+            return False
+        if self._ipv6_guard_expected():
+            return True
+        try:
+            return network_manager.is_connected()
+        except Exception:
+            return False
+
+    def _cancel_ipv6_guard_startup_after_helper_gate(
+        self, audit: HelperInstallationAudit
+    ) -> None:
+        self._set_cached_ipv6_guard_status(None, error=audit.details)
+        # If an ordinary PIA VPN is active but this AppImage cannot verify the
+        # exact helper/guard boundary, stop the VPN rather than present a
+        # connected state that might leak native IPv6.  Any existing guard table
+        # is left untouched because it cannot be verified safely here.
+        try:
+            connected = network_manager.is_connected()
+        except Exception:
+            connected = None
+        if connected is True:
+            try:
+                network_manager.disconnect(
+                    str(self.settings.value("connection/profile_uuid", "")).strip()
+                )
+            except Exception as exc:
+                self._show_error(
+                    AppError(
+                        "error.ipv6_guard_startup.title",
+                        "error.ipv6_guard_startup.message",
+                        details=f"Helper gate: {audit.details}; VPN stop failed: {exc}",
+                    )
+                )
+                return
+            self._last_connected_state = False
+            self.settings.remove("connection/profile_uuid")
+            self.settings.sync()
+        self._update_controls()
+        self.update_connection_status(force=True)
+
+    def _reconcile_ipv6_guard_startup(self, *, _helper_checked: bool = False) -> None:
+        if self._stage4_preview or self.kill_switch_runtime.feature_enabled:
+            return
+        if self._connection_busy:
+            QTimer.singleShot(250, self._reconcile_ipv6_guard_startup)
+            return
+        if not self._startup_ipv6_guard_reconciliation_required():
+            return
+        if not _helper_checked:
+            self._ensure_packaged_kill_switch_helper(
+                on_ready=lambda: self._reconcile_ipv6_guard_startup(_helper_checked=True),
+                on_cancel=self._cancel_ipv6_guard_startup_after_helper_gate,
+            )
+            return
+
+        self._connection_busy = True
+        self._update_controls()
+        self.log("info", "log.ipv6_guard.startup_check")
+        existing_session = self._ipv6_guard_session
+
+        def job() -> _NormalGuardStartupOutcome:
+            session = existing_session or KillSwitchSessionClient(timeout=120.0)
+            try:
+                result = IPv6GuardLifecycle(
+                    session=session,
+                    vpn_backend=network_manager,
+                ).reconcile_startup()
+                return _NormalGuardStartupOutcome(session=session, result=result)
+            except Exception as exc:
+                status: IPv6GuardStatus | None = None
+                status_error = ""
+                try:
+                    if session.is_open:
+                        status = session.ipv6_guard_status()
+                except Exception as status_exc:
+                    status_error = str(status_exc)
+                cause = exc.cause if isinstance(exc, IPv6GuardStartupError) and exc.cause else exc
+                raise _IPv6GuardJobFailure(
+                    cause,
+                    session=session,
+                    status=status,
+                    status_error=status_error,
+                    guard_retained=True,
+                    vpn_connected=(exc.vpn_connected if isinstance(exc, IPv6GuardStartupError) else None),
+                ) from exc
+
+        def success(result: Any) -> None:
+            outcome = result
+            assert isinstance(outcome, _NormalGuardStartupOutcome)
+            self._connection_busy = False
+            disposition = outcome.result.disposition
+            self._set_cached_ipv6_guard_status(outcome.result.guard_status)
+            if disposition == "adopted-connected":
+                if self._ipv6_guard_session is not outcome.session:
+                    self._close_ipv6_guard_session()
+                self._ipv6_guard_session = outcome.session
+                self._set_ipv6_guard_expected(True)
+                self._last_connected_state = True
+                self.log("ok", "log.ipv6_guard.startup_adopted")
+                self.refresh_public_info(show_errors=False)
+            else:
+                self._set_ipv6_guard_expected(False)
+                self._last_connected_state = False
+                self.settings.remove("connection/profile_uuid")
+                self.settings.sync()
+                try:
+                    outcome.session.close()
+                except Exception:
+                    pass
+                self._close_ipv6_guard_session()
+                if disposition == "cleared-stale-guard":
+                    self.log("ok", "log.ipv6_guard.startup_stale_cleared")
+                elif disposition == "stopped-unprotected-vpn":
+                    self.log("warning", "log.ipv6_guard.startup_unprotected_stopped")
+                    self._show_error(
+                        AppError(
+                            "error.ipv6_guard_startup.title",
+                            "error.ipv6_guard_startup.unprotected_message",
+                        )
+                    )
+                else:
+                    self.log("ok", "log.ipv6_guard.startup_clean")
+            self._update_controls()
+            self.update_connection_status(force=True)
+
+        def failure(error: BaseException) -> None:
+            self._connection_busy = False
+            cause = error
+            if isinstance(error, _IPv6GuardJobFailure):
+                cause = error.cause
+                self._set_cached_ipv6_guard_status(
+                    error.status,
+                    error=error.status_error or str(cause),
+                )
+                self._set_ipv6_guard_expected(True)
+                if error.session is not None:
+                    if self._ipv6_guard_session is not error.session:
+                        self._close_ipv6_guard_session()
+                    self._ipv6_guard_session = error.session
+                if error.vpn_connected is not None:
+                    self._last_connected_state = error.vpn_connected
+
+            # Startup must never leave a normal PIA VPN running when the small
+            # IPv6 guard could not be verified.  Disconnecting the VPN is the
+            # only safe unprivileged mutation here; any unknown firewall table
+            # is deliberately retained for later explicit reconciliation.
+            guard_verified = bool(
+                self._ipv6_guard_status is not None
+                and self._ipv6_guard_status.protection_active
+                and not self._ipv6_guard_status_error
+            )
+            safety_note = ""
+            if not guard_verified:
+                try:
+                    connected_now = network_manager.is_connected()
+                except Exception as state_exc:
+                    safety_note = f"; VPN state also became unknown: {state_exc}"
+                else:
+                    if connected_now:
+                        try:
+                            network_manager.disconnect(
+                                str(self.settings.value("connection/profile_uuid", "")).strip()
+                            )
+                        except Exception as stop_exc:
+                            safety_note = f"; unsafe VPN stop failed: {stop_exc}"
+                        else:
+                            self._last_connected_state = False
+                            self.settings.remove("connection/profile_uuid")
+                            self.settings.sync()
+                            safety_note = "; unverified normal VPN was stopped"
+
+            self.log("error", "log.ipv6_guard.startup_failed")
+            self._update_controls()
+            self.update_connection_status(force=True)
+            self._show_error(
+                AppError(
+                    "error.ipv6_guard_startup.title",
+                    "error.ipv6_guard_startup.message",
+                    details=f"{type(cause).__name__}: {cause}{safety_note}",
                 )
             )
 
@@ -1510,6 +2022,7 @@ class MainWindow(QMainWindow):
         self.tray_action.setText(tr("menu.tray"))
 
         self.help_menu.setTitle(tr("menu.help"))
+        self.emergency_reset_action.setText(tr("menu.emergency_reset"))
         self.about_action.setText(tr("menu.about"))
 
         self.status_group.setTitle(tr("status.group"))
@@ -1617,7 +2130,7 @@ class MainWindow(QMainWindow):
 
         try:
             connected = network_manager.is_connected()
-        except BaseException as exc:
+        except Exception as exc:
             self.kill_switch_action.setChecked(current)
             self._show_error(exc)
             return
@@ -1635,7 +2148,135 @@ class MainWindow(QMainWindow):
         else:
             self._disable_kill_switch_preference()
 
-    def _authorize_kill_switch_preference(self) -> None:
+    def _ensure_packaged_kill_switch_helper(
+        self,
+        *,
+        on_ready: Callable[[], None],
+        on_cancel: Callable[[HelperInstallationAudit], None],
+    ) -> None:
+        """Gate privileged VPN protection on an exact root-owned helper match.
+
+        The same restricted helper owns the normal-mode IPv6-only guard and the
+        optional full Session Kill Switch.  Source-tree runs remain unmanaged.
+        A packaged AppImage never treats a merely protocol-compatible old helper
+        as current: the complete installed boundary must match this AppImage.
+        """
+
+        audit = self._packaged_helper_manager.audit()
+        if audit.current:
+            on_ready()
+            return
+
+        if not audit.installable:
+            self.log(
+                "error",
+                "log.kill_switch.helper_install.blocked",
+                details=audit.details,
+            )
+            self._show_error(
+                AppError(
+                    "error.kill_switch_helper_install.title",
+                    "error.kill_switch_helper_install.unsafe_message"
+                    if audit.state is HelperInstallationState.UNSAFE
+                    else "error.kill_switch_helper_install.bundle_message",
+                    details=audit.details,
+                )
+            )
+            on_cancel(audit)
+            return
+
+        updating = audit.state is HelperInstallationState.OUTDATED
+        answer = QMessageBox.question(
+            self,
+            tr(
+                "kill_switch.helper_install.update_title"
+                if updating
+                else "kill_switch.helper_install.install_title"
+            ),
+            tr(
+                "kill_switch.helper_install.update_message"
+                if updating
+                else "kill_switch.helper_install.install_message"
+            ),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            self.log("warning", "log.kill_switch.helper_install.declined")
+            on_cancel(audit)
+            return
+
+        self._connection_busy = True
+        self._update_controls()
+        self.log(
+            "info",
+            "log.kill_switch.helper_install.updating"
+            if updating
+            else "log.kill_switch.helper_install.installing",
+        )
+
+        def job() -> HelperInstallationAudit:
+            return self._packaged_helper_manager.install_or_upgrade()
+
+        def success(result: Any) -> None:
+            installed = result
+            assert isinstance(installed, HelperInstallationAudit)
+            self._connection_busy = False
+            self.log("ok", "log.kill_switch.helper_install.ready")
+            self._update_controls()
+            on_ready()
+
+        def failure(error: BaseException) -> None:
+            self._connection_busy = False
+            failed_audit = self._packaged_helper_manager.audit()
+            self.log(
+                "error",
+                "log.kill_switch.helper_install.failed",
+                details=f"{type(error).__name__}: {error}",
+            )
+            self._update_controls()
+            self._show_error(
+                AppError(
+                    "error.kill_switch_helper_install.title",
+                    "error.kill_switch_helper_install.message",
+                    details=f"{type(error).__name__}: {error}",
+                )
+            )
+            on_cancel(failed_audit)
+
+        self._run_worker(job, on_success=success, on_failure=failure)
+
+    def _cancel_kill_switch_enable_after_helper_gate(
+        self, audit: HelperInstallationAudit
+    ) -> None:
+        self.kill_switch_runtime.set_feature_enabled(False)
+        self.kill_switch_action.setChecked(False)
+        self._set_cached_kill_switch_status(None, error=audit.details)
+        self._update_controls()
+        self.update_connection_status(force=True)
+
+    def _mark_packaged_helper_unavailable_for_startup(
+        self, audit: HelperInstallationAudit
+    ) -> None:
+        # Keep the persisted preference intact.  A user who cancels an upgrade
+        # gets a visible fail-closed state and can authorize it on the next check.
+        self._set_cached_kill_switch_status(None, error=audit.details)
+        self.log(
+            "warning",
+            "log.kill_switch.helper_install.startup_not_ready",
+            details=audit.details,
+        )
+        self._update_controls()
+        self.update_connection_status(force=True)
+
+    def _authorize_kill_switch_preference(self, *, _helper_checked: bool = False) -> None:
+        if not _helper_checked:
+            self._ensure_packaged_kill_switch_helper(
+                on_ready=lambda: self._authorize_kill_switch_preference(_helper_checked=True),
+                on_cancel=self._cancel_kill_switch_enable_after_helper_gate,
+            )
+            return
+
         self._connection_busy = True
         self._update_controls()
         self.kill_switch_action.setEnabled(False)
@@ -1652,9 +2293,34 @@ class MainWindow(QMainWindow):
                         "error.kill_switch_existing_lock.message",
                         details=(
                             "A verified production kill-switch table already exists, "
-                            "but this Stage-5C app session has no matching probe baseline."
+                            "but this app session has no matching probe baseline."
                         ),
                     )
+
+                # A crash-surviving normal-mode IPv6 guard is a separate
+                # firewall mode.  The preference toggle is allowed only while
+                # the VPN is down, so verify that invariant again inside the
+                # worker before changing either protection mode.
+                if network_manager.is_connected():
+                    raise IPv6GuardLifecycleError(
+                        "Refusing to enable the Session Kill Switch preference while the PIA VPN is active."
+                    )
+                guard = session.ipv6_guard_status()
+                if guard.present:
+                    if not guard.protection_active:
+                        raise IPv6GuardLifecycleError(
+                            "The existing IPv6-only guard could not be structurally verified."
+                        )
+                    guard = session.ipv6_guard_disable()
+                    if (
+                        guard.state != "disabled"
+                        or guard.present
+                        or not guard.verified
+                        or guard.problems
+                    ):
+                        raise IPv6GuardLifecycleError(
+                            "The IPv6-only guard could not be verified as released before enabling the Kill Switch."
+                        )
                 return _KillSwitchAuthorizationOutcome(
                     session=session,
                     status=status,
@@ -1679,6 +2345,10 @@ class MainWindow(QMainWindow):
             assert isinstance(outcome, _KillSwitchAuthorizationOutcome)
             self._kill_switch_session = outcome.session
             self._set_cached_kill_switch_status(outcome.status)
+            self._set_ipv6_guard_expected(False)
+            self._set_cached_ipv6_guard_status(None)
+            self._close_ipv6_guard_session()
+            self._set_kill_switch_reconciliation_marker(False)
             self.kill_switch_runtime.set_feature_enabled(True)
             self._connection_busy = False
             self.kill_switch_action.setChecked(True)
@@ -1713,10 +2383,19 @@ class MainWindow(QMainWindow):
                 cause = error
                 self.kill_switch_runtime.set_feature_enabled(False)
                 self.kill_switch_action.setChecked(False)
-            self.log("error", "log.kill_switch.preference.failed")
+            authorization_cancelled = self._authorization_denied_in_chain(cause)
+            self.log(
+                "warning" if authorization_cancelled else "error",
+                "log.kill_switch.preference.authorization_cancelled"
+                if authorization_cancelled
+                else "log.kill_switch.preference.failed",
+            )
             self._update_controls()
             self.update_connection_status(force=True)
-            self._show_error(self._friendly_kill_switch_error(cause))
+            self._show_kill_switch_error(
+                cause,
+                authorization_cancel_safe=True,
+            )
 
         self._run_worker(job, on_success=success, on_failure=failure)
 
@@ -1815,7 +2494,7 @@ class MainWindow(QMainWindow):
             self._clear_crash_recovery_record_after_safe_release()
             self._update_controls()
             self.update_connection_status(force=True)
-            self.refresh_public_info(show_errors=False)
+            self.public_info = None
 
         def failure(error: BaseException) -> None:
             self._connection_busy = False
@@ -1898,6 +2577,12 @@ class MainWindow(QMainWindow):
                 "error.kill_switch_blocking.message",
                 details=details,
             )
+        if isinstance(error, IPv6GuardLifecycleError):
+            return AppError(
+                "error.ipv6_guard.title",
+                "error.ipv6_guard.retained_message",
+                details=details,
+            )
         if isinstance(error, KillSwitchClientError):
             return AppError(
                 "error.kill_switch_authorization.title",
@@ -1913,7 +2598,16 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------
     # Logging
     # ------------------------------------------------------------------
+    def _scroll_live_log_to_end(self) -> None:
+        scrollbar = self.log_view.verticalScrollBar()
+        scrollbar.setValue(scrollbar.maximum())
+
     def log(self, level: str, key: str, **values: Any) -> None:
+        scrollbar = self.log_view.verticalScrollBar()
+        follow_tail = (
+            not self.log_view.isVisible()
+            or scrollbar.value() >= max(0, scrollbar.maximum() - 2)
+        )
         message = redact_secrets(tr(key, **values))
         timestamp = datetime.now().strftime("%H:%M:%S")
         level_key = f"log.level.{level}"
@@ -1921,6 +2615,8 @@ class MainWindow(QMainWindow):
         self.log_view.appendPlainText(
             f"{timestamp}  {level_text:<7}  {message}"
         )
+        if follow_tail:
+            self._scroll_live_log_to_end()
 
     def copy_log(self) -> None:
         QApplication.clipboard().setText(self.log_view.toPlainText())
@@ -1931,7 +2627,7 @@ class MainWindow(QMainWindow):
             self,
             tr("log.save_title"),
             str(default_path),
-            "Text files (*.txt *.log);;All files (*)",
+            tr("log.file_filter"),
         )
         if not path:
             return
@@ -1954,6 +2650,35 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------
     # Credentials
     # ------------------------------------------------------------------
+    def _request_initial_region_refresh(self) -> None:
+        """Start the first network refresh only when startup protection permits it.
+
+        A crash-surviving full Kill Switch can intentionally block every normal
+        network path while startup reconciliation waits for Polkit.  Starting a
+        server-list request in parallel would therefore produce an expected
+        network failure and, worse, a modal error dialog can obscure the Polkit
+        authentication prompt.  Keep the cached region list and defer the first
+        network request until the host state is verified as connected or safely
+        released.
+        """
+
+        if self._startup_kill_switch_reconciliation_required():
+            self._initial_region_refresh_pending = True
+            return
+        QTimer.singleShot(0, self.refresh_regions)
+
+    def _release_initial_region_refresh_if_safe(self) -> None:
+        if not self._initial_region_refresh_pending:
+            return
+        try:
+            connected = network_manager.is_connected()
+        except Exception:
+            return
+        if self._disconnected_kill_switch_may_block(connected=connected):
+            return
+        self._initial_region_refresh_pending = False
+        QTimer.singleShot(0, self.refresh_regions)
+
     def _first_start(self) -> None:
         if self._initial_setup_done:
             return
@@ -1973,6 +2698,12 @@ class MainWindow(QMainWindow):
                     tr("credentials.cancel_first_run_title"),
                     tr("credentials.cancel_first_run"),
                 )
+
+        # The first server-list refresh starts only after the first-run modal
+        # flow has finished *and* any crash-surviving full Kill Switch has been
+        # reconciled. Qt timers keep running inside dialog.exec(), and a safely
+        # blocked recovery state has no normal network path by design.
+        self._request_initial_region_refresh()
 
     def edit_credentials(self, *, first_run: bool) -> bool:
         username = self.credential_store.stored_username()
@@ -2036,6 +2767,83 @@ class MainWindow(QMainWindow):
         worker.signals.finished.connect(success)
         worker.signals.failed.connect(failure)
         self.thread_pool.start(worker)
+
+    @staticmethod
+    def _authorization_denied_in_chain(error: BaseException) -> bool:
+        """Return True only when Polkit cancellation/denial is in the exception chain."""
+
+        current: BaseException | None = error
+        seen: set[int] = set()
+        while current is not None and id(current) not in seen:
+            seen.add(id(current))
+            if isinstance(current, AuthorizationDeniedError):
+                return True
+            next_error = current.__cause__
+            if next_error is None:
+                next_error = current.__context__
+            current = next_error
+        return False
+
+    def _show_authorization_not_granted(self, error: BaseException) -> None:
+        """Present a deliberate Polkit cancellation as a neutral user outcome."""
+
+        details = redact_secrets(f"{type(error).__name__}: {error}")
+        self.log("warning", "log.technical_details", details=details)
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Information)
+        box.setWindowTitle(tr("authorization.not_granted.title"))
+        box.setText(tr("authorization.not_granted.message"))
+        box.setInformativeText(tr("common.details_hint"))
+        box.setDetailedText(details)
+        box.setStandardButtons(QMessageBox.StandardButton.Ok)
+        box.exec()
+
+    def _show_kill_switch_error(
+        self,
+        error: BaseException,
+        *,
+        authorization_cancel_safe: bool = False,
+    ) -> None:
+        if authorization_cancel_safe and self._authorization_denied_in_chain(error):
+            self._show_authorization_not_granted(error)
+            return
+        self._show_error(self._friendly_kill_switch_error(error))
+
+    def _show_startup_recovery_failure(self, *, details: str) -> None:
+        """Offer explicit safe recovery choices after a failed startup reconciliation."""
+
+        safe_details = redact_secrets(details)
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Critical)
+        box.setWindowTitle(tr("error.kill_switch_startup_recovery.title"))
+        box.setText(tr("error.kill_switch_startup_recovery.message"))
+        if safe_details:
+            box.setInformativeText(tr("common.details_hint"))
+            box.setDetailedText(safe_details)
+
+        retry_button = box.addButton(
+            tr("startup_recovery.retry"),
+            QMessageBox.ButtonRole.AcceptRole,
+        )
+        reset_button = box.addButton(
+            tr("menu.emergency_reset"),
+            QMessageBox.ButtonRole.ActionRole,
+        )
+        cancel_button = box.addButton(
+            tr("common.cancel"),
+            QMessageBox.ButtonRole.RejectRole,
+        )
+        box.setDefaultButton(retry_button)
+        box.setEscapeButton(cancel_button)
+        box.exec()
+
+        clicked = box.clickedButton()
+        if clicked is retry_button:
+            QTimer.singleShot(0, self._reconcile_kill_switch_startup)
+        elif clicked is reset_button:
+            # The reset remains deliberate: this only opens its independent
+            # confirmation dialog; it is never executed automatically.
+            QTimer.singleShot(0, self.emergency_reset)
 
     def _show_error(self, error: BaseException) -> None:
         friendly = friendly_error(error)
@@ -2255,8 +3063,8 @@ class MainWindow(QMainWindow):
             return
         try:
             connected = network_manager.is_connected()
-        except BaseException:
-            connected = False
+        except Exception:
+            return
         region = self._selected_region()
         if (
             connected
@@ -2356,7 +3164,7 @@ class MainWindow(QMainWindow):
             return
         try:
             connected = network_manager.is_connected()
-        except BaseException as exc:
+        except Exception as exc:
             self._show_error(exc)
             return
         if connected:
@@ -2378,7 +3186,7 @@ class MainWindow(QMainWindow):
                 return
             self.connect_region(region)
 
-    def connect_region(self, region: Region) -> None:
+    def connect_region(self, region: Region, *, _helper_checked: bool = False) -> None:
         if self._connection_busy:
             return
 
@@ -2393,13 +3201,20 @@ class MainWindow(QMainWindow):
             SystemCheckDialog(self.system_checks, self).exec()
             return
 
+        if not _helper_checked:
+            self._ensure_packaged_kill_switch_helper(
+                on_ready=lambda: self.connect_region(region, _helper_checked=True),
+                on_cancel=lambda _audit: self._restore_active_region_selection(),
+            )
+            return
+
         credentials = self._get_credentials()
         if credentials is None:
             return
 
         try:
             was_connected = network_manager.is_connected()
-        except BaseException as exc:
+        except Exception as exc:
             self._show_error(exc)
             return
 
@@ -2453,16 +3268,74 @@ class MainWindow(QMainWindow):
 
         config_path = cache_dir() / f"{network_manager.INTERFACE_NAME}.conf"
         existing_session = self._kill_switch_session
+        existing_guard_session = self._ipv6_guard_session
+        guard_expected_before = self._ipv6_guard_expected()
+        if kill_switch_enabled:
+            # Persist fail-closed intent before any worker can arm the production
+            # firewall.  If the GUI dies in the narrow window before the richer
+            # crash-recovery record is written, the next process still knows it
+            # must authenticate and inspect the host instead of assuming idle.
+            self._set_kill_switch_reconciliation_marker(True)
+        else:
+            # Persist intent before the privileged guard is armed.  A crash
+            # after that point must cause startup reconciliation instead of
+            # silently assuming that native IPv6 is safe.
+            self._set_ipv6_guard_expected(True)
+            self.log("info", "log.ipv6_guard.arming")
 
-        def job() -> str | _ProtectedConnectOutcome:
+        def job() -> _NormalGuardConnectOutcome | _ProtectedConnectOutcome:
             if not kill_switch_enabled:
+                session = existing_guard_session or KillSwitchSessionClient(timeout=120.0)
                 try:
                     create_wireguard_config(
                         config_path=config_path,
                         credentials=credentials,
                         region=region,
                     )
-                    return network_manager.connect(config_path)
+                    lifecycle = IPv6GuardLifecycle(
+                        session=session,
+                        vpn_backend=network_manager,
+                    )
+                    result = lifecycle.connect(config_path)
+                    return _NormalGuardConnectOutcome(
+                        profile_uuid=result.profile_uuid,
+                        session=session,
+                        status=result.guard_status,
+                    )
+                except Exception as exc:
+                    status: IPv6GuardStatus | None = None
+                    status_error = ""
+                    guard_retained = True
+                    vpn_connected: bool | None = None
+                    cause: BaseException = exc
+                    if isinstance(exc, IPv6GuardConnectError):
+                        cause = exc.cause or exc
+                        status = exc.guard_status
+                        guard_retained = exc.guard_retained
+                        vpn_connected = exc.vpn_connected
+                        status_error = exc.cleanup_error
+                    else:
+                        if session.is_open:
+                            try:
+                                status = session.ipv6_guard_status()
+                                guard_retained = bool(status.present)
+                            except Exception as status_exc:
+                                status_error = str(status_exc)
+                                guard_retained = True
+                        else:
+                            # No authenticated guard session was ever opened in
+                            # this attempt.  Preserve a pre-existing marker, but
+                            # do not invent a new active guard after an early
+                            # credential/config/auth failure.
+                            guard_retained = guard_expected_before
+                    raise _IPv6GuardJobFailure(
+                        cause,
+                        session=session,
+                        status=status,
+                        status_error=status_error,
+                        guard_retained=guard_retained,
+                        vpn_connected=vpn_connected,
+                    ) from exc
                 finally:
                     try:
                         config_path.unlink(missing_ok=True)
@@ -2574,13 +3447,23 @@ class MainWindow(QMainWindow):
                 self._set_cached_kill_switch_status(result.status)
                 self._kill_switch_probe_baseline = result.baseline
                 self._kill_switch_route_plan = result.route_plan
+                self._set_ipv6_guard_expected(False)
+                self._set_cached_ipv6_guard_status(None)
+                self._close_ipv6_guard_session()
                 self.log("ok", "log.kill_switch.crash_record.connected_saved")
             else:
-                profile_uuid = str(result)
+                assert isinstance(result, _NormalGuardConnectOutcome)
+                profile_uuid = result.profile_uuid
+                if self._ipv6_guard_session is not result.session:
+                    self._close_ipv6_guard_session()
+                self._ipv6_guard_session = result.session
+                self._set_cached_ipv6_guard_status(result.status)
+                self._set_ipv6_guard_expected(True)
                 self._kill_switch_probe_baseline = None
                 self._kill_switch_route_plan = None
                 self._set_cached_kill_switch_status(None)
                 self._close_kill_switch_session()
+                self.log("ok", "log.ipv6_guard.armed")
 
             self._active_region_id = region.region_id
             self._active_region_fallback = region.name
@@ -2612,7 +3495,31 @@ class MainWindow(QMainWindow):
         def failure(error: BaseException) -> None:
             self._connection_busy = False
             cause = error
-            if isinstance(error, _KillSwitchJobFailure):
+            if isinstance(error, _IPv6GuardJobFailure):
+                cause = error.cause
+                self._set_cached_ipv6_guard_status(
+                    error.status,
+                    error=error.status_error,
+                )
+                if error.guard_retained:
+                    self._set_ipv6_guard_expected(True)
+                    if error.session is not None:
+                        if self._ipv6_guard_session is not error.session:
+                            self._close_ipv6_guard_session()
+                        self._ipv6_guard_session = error.session
+                    self.log("warning", "log.ipv6_guard.retained_after_failure")
+                else:
+                    self._set_ipv6_guard_expected(False)
+                    if error.session is not None:
+                        try:
+                            error.session.close()
+                        except Exception:
+                            pass
+                    self._close_ipv6_guard_session()
+                    self._set_cached_ipv6_guard_status(error.status)
+                if error.vpn_connected is not None:
+                    self._last_connected_state = error.vpn_connected
+            elif isinstance(error, _KillSwitchJobFailure):
                 cause = error.cause
                 self._log_connection_events(error.events)
                 self._kill_switch_probe_baseline = error.baseline
@@ -2636,10 +3543,19 @@ class MainWindow(QMainWindow):
                         error.status,
                         error=error.status_error,
                     )
-            self.log("error", "activity.connection_failed")
+            authorization_cancelled = self._authorization_denied_in_chain(cause)
+            self.log(
+                "warning" if authorization_cancelled else "error",
+                "activity.connection_authorization_cancelled"
+                if authorization_cancelled
+                else "activity.connection_failed",
+            )
             self._update_controls()
             self.update_connection_status(force=True)
-            self._show_error(self._friendly_kill_switch_error(cause))
+            self._show_kill_switch_error(
+                cause,
+                authorization_cancel_safe=True,
+            )
 
         self._run_worker(job, on_success=success, on_failure=failure)
 
@@ -2682,7 +3598,7 @@ class MainWindow(QMainWindow):
                 self._last_connected_state = True
                 self.update_connection_status(force=True)
                 return
-        except BaseException as exc:
+        except Exception as exc:
             self._show_error(exc)
             return
 
@@ -2801,6 +3717,7 @@ class MainWindow(QMainWindow):
             self.log("ok", "log.kill_switch.recovery.reconnect_complete")
             self._update_controls()
             self.update_connection_status(force=True)
+            self._release_initial_region_refresh_if_safe()
             self.refresh_public_info(show_errors=False)
             self._rebuild_tray_menu()
 
@@ -3000,13 +3917,14 @@ class MainWindow(QMainWindow):
                     error=error.status_error,
                 )
             try:
-                still_connected = network_manager.is_connected()
-            except BaseException:
-                still_connected = False
-            self._last_connected_state = still_connected
-            if still_connected:
+                still_connected: bool | None = network_manager.is_connected()
+            except Exception:
+                still_connected = None
+            if still_connected is not None:
+                self._last_connected_state = still_connected
+            if still_connected is True:
                 self._restore_active_region_selection()
-            else:
+            elif still_connected is False:
                 self.settings.remove("connection/profile_uuid")
                 self.settings.sync()
             self.log("error", "activity.switch_failed")
@@ -3036,6 +3954,7 @@ class MainWindow(QMainWindow):
             return
 
         self._connection_busy = True
+        self._intentional_disconnect_in_progress = True
         self._update_controls()
         self.status_detail_label.setText(tr("activity.disconnecting"))
         self.log("info", "activity.disconnecting")
@@ -3044,11 +3963,46 @@ class MainWindow(QMainWindow):
             self.settings.value("connection/profile_uuid", "")
         ).strip()
         existing_session = self._kill_switch_session
+        existing_guard_session = self._ipv6_guard_session
 
-        def job() -> None | _ProtectedDisconnectOutcome:
+        def job() -> _NormalGuardDisconnectOutcome | _ProtectedDisconnectOutcome:
             if not kill_switch_enabled:
-                network_manager.disconnect(profile_uuid)
-                return None
+                session = existing_guard_session or KillSwitchSessionClient(timeout=120.0)
+                try:
+                    lifecycle = IPv6GuardLifecycle(
+                        session=session,
+                        vpn_backend=network_manager,
+                    )
+                    result = lifecycle.disconnect(profile_uuid)
+                    return _NormalGuardDisconnectOutcome(
+                        session=session,
+                        status=result.guard_status,
+                    )
+                except Exception as exc:
+                    status: IPv6GuardStatus | None = None
+                    status_error = ""
+                    guard_retained = True
+                    vpn_connected: bool | None = None
+                    cause: BaseException = exc
+                    if isinstance(exc, IPv6GuardDisconnectError):
+                        cause = exc.cause or exc
+                        status = exc.guard_status
+                        guard_retained = exc.guard_retained
+                        vpn_connected = not exc.vpn_disconnected
+                    else:
+                        try:
+                            if session.is_open:
+                                status = session.ipv6_guard_status()
+                        except Exception as status_exc:
+                            status_error = str(status_exc)
+                    raise _IPv6GuardJobFailure(
+                        cause,
+                        session=session,
+                        status=status,
+                        status_error=status_error,
+                        guard_retained=guard_retained,
+                        vpn_connected=vpn_connected,
+                    ) from exc
 
             assert baseline is not None
             events: list[ConnectionEvent] = []
@@ -3103,6 +4057,7 @@ class MainWindow(QMainWindow):
 
         def success(result: Any) -> None:
             self._connection_busy = False
+            self._intentional_disconnect_in_progress = False
             if isinstance(result, _ProtectedDisconnectOutcome):
                 self._log_connection_events(result.events)
                 if self._kill_switch_session is not result.session:
@@ -3113,6 +4068,14 @@ class MainWindow(QMainWindow):
                 self._kill_switch_route_plan = None
                 self._close_kill_switch_session()
             else:
+                assert isinstance(result, _NormalGuardDisconnectOutcome)
+                if self._ipv6_guard_session is not result.session:
+                    self._close_ipv6_guard_session()
+                self._ipv6_guard_session = result.session
+                self._set_cached_ipv6_guard_status(result.status)
+                self._set_ipv6_guard_expected(False)
+                self.log("ok", "log.ipv6_guard.released")
+                self._close_ipv6_guard_session()
                 self._kill_switch_probe_baseline = None
                 self._kill_switch_route_plan = None
                 self._set_cached_kill_switch_status(None)
@@ -3123,17 +4086,36 @@ class MainWindow(QMainWindow):
             self._clear_crash_recovery_record_after_safe_release()
             self._last_connected_state = False
             self.log("ok", "log.disconnected")
+            self.public_info = None
             self._update_controls()
             self.update_connection_status(force=True)
-            self.refresh_public_info(show_errors=False)
             self._rebuild_tray_menu()
             if after_disconnect is not None:
                 after_disconnect()
 
         def failure(error: BaseException) -> None:
             self._connection_busy = False
+            self._intentional_disconnect_in_progress = False
             cause = error
-            if isinstance(error, _KillSwitchJobFailure):
+            if isinstance(error, _IPv6GuardJobFailure):
+                cause = error.cause
+                self._set_cached_ipv6_guard_status(
+                    error.status,
+                    error=error.status_error,
+                )
+                if error.guard_retained:
+                    self._set_ipv6_guard_expected(True)
+                    if error.session is not None:
+                        if self._ipv6_guard_session is not error.session:
+                            self._close_ipv6_guard_session()
+                        self._ipv6_guard_session = error.session
+                    self.log("warning", "log.ipv6_guard.retained_after_failure")
+                else:
+                    self._set_ipv6_guard_expected(False)
+                    self._close_ipv6_guard_session()
+                if error.vpn_connected is not None:
+                    self._last_connected_state = error.vpn_connected
+            elif isinstance(error, _KillSwitchJobFailure):
                 cause = error.cause
                 self._log_connection_events(error.events)
                 self._kill_switch_probe_baseline = error.baseline
@@ -3145,10 +4127,10 @@ class MainWindow(QMainWindow):
                     error=error.status_error,
                 )
             try:
-                still_connected = network_manager.is_connected()
-            except BaseException:
-                still_connected = True
-            if not still_connected:
+                still_connected: bool | None = network_manager.is_connected()
+            except Exception:
+                still_connected = None
+            if still_connected is False:
                 self.settings.remove("connection/profile_uuid")
                 self.settings.sync()
             self.log("error", "activity.disconnect_failed")
@@ -3166,14 +4148,27 @@ class MainWindow(QMainWindow):
         if connected is None:
             try:
                 connected = network_manager.is_connected()
-            except BaseException:
-                connected = False
+            except Exception:
+                return self.kill_switch_runtime.feature_enabled
         if connected or not self.kill_switch_runtime.feature_enabled:
             return False
-        return (
-            self._kill_switch_status is None
-            or self._kill_switch_status.present
-            or bool(self._kill_switch_status_error)
+        if self._kill_switch_status_error:
+            return True
+        if self._kill_switch_status is not None:
+            return self._kill_switch_status.present
+        return self._startup_kill_switch_reconciliation_required()
+
+    def _networkmanager_unknown_view_state(self, error: BaseException) -> KillSwitchViewState:
+        status = self._kill_switch_status
+        return derive_kill_switch_view_state(
+            KillSwitchObservation.create(
+                feature_enabled=self.kill_switch_runtime.feature_enabled,
+                vpn_connected=bool(self._last_connected_state),
+                table_present=False if status is None else status.present,
+                table_verified=False if status is None else status.verified,
+                problems=() if status is None else status.problems,
+                error=f"NetworkManager status could not be verified: {error}",
+            )
         )
 
     def _show_suppressed_public_info(self) -> None:
@@ -3188,7 +4183,123 @@ class MainWindow(QMainWindow):
             self.ipv6_value.setText(tr("common.unknown"))
             self.dns_value.setText(tr("common.unknown"))
 
+    def _release_ipv6_guard_after_unexpected_vpn_loss(
+        self,
+        *,
+        after_release: Callable[[], None] | None = None,
+    ) -> None:
+        if self._ipv6_guard_release_scheduled or self._connection_busy:
+            return
+        if self.kill_switch_runtime.feature_enabled or not self._ipv6_guard_expected():
+            if after_release is not None:
+                after_release()
+            return
+        session = self._ipv6_guard_session
+        if session is None:
+            audit = self._packaged_helper_manager.audit()
+            if not audit.current:
+                self._set_cached_ipv6_guard_status(
+                    self._ipv6_guard_status,
+                    error=(
+                        "The IPv6 guard is expected, but the exact packaged helper "
+                        f"boundary is not available: {audit.details}"
+                    ),
+                )
+                self.log("warning", "log.ipv6_guard.release_deferred")
+                self._update_controls()
+                self.update_connection_status(force=True)
+                self._show_error(
+                    AppError(
+                        "error.ipv6_guard.title",
+                        "error.ipv6_guard.release_deferred_message",
+                        details=audit.details,
+                    )
+                )
+                return
+            # A crash or broker timeout can leave the kernel guard alive while
+            # this GUI no longer owns an authenticated session.  Open a fresh
+            # fixed helper session and still require verified VPN-down before
+            # any guard removal.
+            session = KillSwitchSessionClient(timeout=120.0)
+
+        self._ipv6_guard_release_scheduled = True
+        self.log("info", "log.ipv6_guard.releasing_after_loss")
+
+        def job() -> _NormalGuardDisconnectOutcome:
+            try:
+                result = IPv6GuardLifecycle(
+                    session=session,
+                    vpn_backend=network_manager,
+                ).release_after_verified_vpn_loss()
+                return _NormalGuardDisconnectOutcome(
+                    session=session,
+                    status=result.guard_status,
+                )
+            except Exception as exc:
+                status: IPv6GuardStatus | None = None
+                status_error = ""
+                try:
+                    if session.is_open:
+                        status = session.ipv6_guard_status()
+                except Exception as status_exc:
+                    status_error = str(status_exc)
+                cause = exc.cause if isinstance(exc, IPv6GuardDisconnectError) and exc.cause else exc
+                raise _IPv6GuardJobFailure(
+                    cause,
+                    session=session,
+                    status=status,
+                    status_error=status_error,
+                    guard_retained=True,
+                    vpn_connected=False,
+                ) from exc
+
+        def success(result: Any) -> None:
+            outcome = result
+            assert isinstance(outcome, _NormalGuardDisconnectOutcome)
+            self._ipv6_guard_release_scheduled = False
+            self._set_cached_ipv6_guard_status(outcome.status)
+            self._set_ipv6_guard_expected(False)
+            self.settings.remove("connection/profile_uuid")
+            self.settings.sync()
+            self._close_ipv6_guard_session()
+            self.public_info = None
+            self.log("ok", "log.ipv6_guard.released_after_loss")
+            self._update_controls()
+            self.update_connection_status(force=True)
+            if after_release is not None:
+                after_release()
+
+        def failure(error: BaseException) -> None:
+            self._ipv6_guard_release_scheduled = False
+            cause = error
+            if isinstance(error, _IPv6GuardJobFailure):
+                cause = error.cause
+                self._set_cached_ipv6_guard_status(
+                    error.status,
+                    error=error.status_error or str(cause),
+                )
+            self._set_ipv6_guard_expected(True)
+            self.log("warning", "log.ipv6_guard.retained_after_loss")
+            self._update_controls()
+            self.update_connection_status(force=True)
+            self._show_error(
+                AppError(
+                    "error.ipv6_guard.title",
+                    "error.ipv6_guard.retained_message",
+                    details=f"{type(cause).__name__}: {cause}",
+                )
+            )
+
+        self._run_worker(job, on_success=success, on_failure=failure)
+
     def update_connection_status(self, force: bool = False) -> None:
+        # During an intentional disconnect the worker deliberately moves through
+        # VPN-down/firewall-still-active and then firewall-released boundaries.
+        # The 3-second background poll must not render a transient error from an
+        # intermediate state. Success/failure commits a verified result with
+        # force=True immediately after the transaction finishes.
+        if self._intentional_disconnect_in_progress and self._connection_busy and not force:
+            return
         if self._stage4_preview:
             self._set_stage4_preview_state(
                 self._stage4_preview_index,
@@ -3197,8 +4308,16 @@ class MainWindow(QMainWindow):
             return
         try:
             connected = network_manager.is_connected()
-        except BaseException:
-            connected = False
+        except Exception as exc:
+            self._apply_kill_switch_view_state(
+                self._networkmanager_unknown_view_state(exc),
+                log_transition=not self._connection_busy,
+            )
+            self._show_suppressed_public_info()
+            self._update_controls()
+            if force:
+                self._rebuild_tray_menu()
+            return
 
         changed = (
             self._last_connected_state is None
@@ -3207,9 +4326,30 @@ class MainWindow(QMainWindow):
         previous = self._last_connected_state
         self._last_connected_state = connected
 
-        state = self.kill_switch_runtime.view_state(
-            vpn_connected=connected,
-        )
+        if (
+            not connected
+            and self.kill_switch_runtime.feature_enabled
+            and self._kill_switch_status is None
+            and not self._kill_switch_status_error
+            and not self._startup_kill_switch_reconciliation_required()
+        ):
+            # Remembered preference only: there is no crash/reconciliation hint
+            # and no live VPN, so do not claim an error merely because this new
+            # GUI process has not opened a privileged helper session.  ARMED does
+            # not claim active firewall protection; the helper is authorized when
+            # a protected connection is actually requested.
+            state = derive_kill_switch_view_state(
+                KillSwitchObservation.create(
+                    feature_enabled=True,
+                    vpn_connected=False,
+                    table_present=False,
+                    table_verified=False,
+                )
+            )
+        else:
+            state = self.kill_switch_runtime.view_state(
+                vpn_connected=connected,
+            )
         self._apply_kill_switch_view_state(
             state,
             log_transition=not self._connection_busy,
@@ -3227,9 +4367,20 @@ class MainWindow(QMainWindow):
             and disconnected_lock
         )
         if connected:
+            if self.kill_switch_runtime.feature_enabled:
+                ipv6_verified = bool(
+                    self._kill_switch_status is not None
+                    and self._kill_switch_status.protection_active
+                )
+            else:
+                ipv6_verified = bool(
+                    self._ipv6_guard_status is not None
+                    and self._ipv6_guard_status.protection_active
+                    and not self._ipv6_guard_status_error
+                )
             self.ipv6_value.setText(
                 tr("status.ipv6_blocked")
-                if network_manager.ipv6_blackhole_active()
+                if ipv6_verified
                 else tr("status.ipv6_warning")
             )
             self.dns_value.setText(tr("status.dns_pia"))
@@ -3245,7 +4396,18 @@ class MainWindow(QMainWindow):
             self.connection_button.setText(tr(action_key))
             self.toggle_vpn_action.setText(tr(action_key))
         else:
-            self.ipv6_value.setText(tr("status.ipv6_normal"))
+            guard_still_blocks = (
+                not self.kill_switch_runtime.feature_enabled
+                and self._ipv6_guard_expected()
+                and self._ipv6_guard_status is not None
+                and self._ipv6_guard_status.protection_active
+                and not self._ipv6_guard_status_error
+            )
+            self.ipv6_value.setText(
+                tr("status.ipv6_blocked")
+                if guard_still_blocks
+                else tr("status.ipv6_normal")
+            )
             self.dns_value.setText(tr("status.dns_system"))
             self.connection_button.setText(tr("connection.connect"))
             self.toggle_vpn_action.setText(tr("connection.connect"))
@@ -3253,22 +4415,37 @@ class MainWindow(QMainWindow):
         if disconnected_lock:
             self._show_suppressed_public_info()
         elif self.public_info is None:
-            self.ip_value.setText(tr("common.checking"))
-            self.country_value.setText(tr("common.checking"))
+            self.ip_value.setText(tr("status.not_checked"))
+            self.country_value.setText(tr("status.not_checked"))
         else:
             self.ip_value.setText(self.public_info.ip_address)
             self.country_value.setText(
                 public_country_name(self.public_info.country_code, language())
             )
 
+        unexpected_normal_loss = (
+            changed
+            and previous is True
+            and not connected
+            and not self._connection_busy
+            and not self.kill_switch_runtime.feature_enabled
+            and self._ipv6_guard_expected()
+        )
         if unexpected_protected_loss:
             self._schedule_protected_reconnect()
+        elif unexpected_normal_loss:
+            self.public_info = None
+            self.log("warning", "log.ipv6_guard.vpn_lost")
+            self._release_ipv6_guard_after_unexpected_vpn_loss()
         elif changed and previous is not None and not self._connection_busy:
             self.log(
                 "info",
                 "log.external_connected" if connected else "log.external_disconnected",
             )
-            self.refresh_public_info(show_errors=False)
+            if connected:
+                self.refresh_public_info(show_errors=False)
+            else:
+                self.public_info = None
 
         self._update_controls()
         if force or changed:
@@ -3279,32 +4456,55 @@ class MainWindow(QMainWindow):
             return
         busy = self._connection_busy or self._regions_busy
         has_regions = bool(self.regions)
+        network_state_known = True
         try:
             connected = network_manager.is_connected()
-        except BaseException:
-            connected = False
+        except Exception:
+            network_state_known = False
+            connected = bool(self._last_connected_state)
 
-        disconnected_lock = self._disconnected_kill_switch_may_block(
-            connected=connected,
+        disconnected_lock = (
+            self._disconnected_kill_switch_may_block(connected=connected)
+            if network_state_known
+            else self.kill_switch_runtime.feature_enabled
         )
         self.connection_button.setEnabled(
-            not busy and (has_regions or connected or disconnected_lock)
+            network_state_known
+            and not busy
+            and (has_regions or connected or disconnected_lock)
         )
         self.region_combo.setEnabled(
-            not busy and has_regions and (connected or not disconnected_lock)
+            network_state_known
+            and not busy
+            and has_regions
+            and (connected or not disconnected_lock)
         )
         self.search_edit.setEnabled(
-            not busy and has_regions and (connected or not disconnected_lock)
+            network_state_known
+            and not busy
+            and has_regions
+            and (connected or not disconnected_lock)
         )
         self.reload_button.setEnabled(not busy)
         self.ping_button.setEnabled(not busy and has_regions)
         self.ip_refresh_button.setEnabled(
-            not self._public_info_busy and not disconnected_lock
+            network_state_known and not self._public_info_busy and not disconnected_lock
         )
         self.reload_action.setEnabled(not busy)
         self.ping_action.setEnabled(not busy and has_regions)
-        self.toggle_vpn_action.setEnabled(not self._connection_busy)
-        self.kill_switch_action.setEnabled(not busy and not connected)
+        self.toggle_vpn_action.setEnabled(
+            network_state_known and not self._connection_busy
+        )
+        self.kill_switch_action.setEnabled(
+            network_state_known and not busy and not connected
+        )
+        emergency_relevant = bool(
+            self._kill_switch_status is not None
+            and self._kill_switch_status.present
+            and (not network_state_known or not connected)
+        )
+        self.emergency_reset_action.setVisible(emergency_relevant)
+        self.emergency_reset_action.setEnabled(not busy and emergency_relevant)
 
     # ------------------------------------------------------------------
     # Public network information
@@ -3323,6 +4523,7 @@ class MainWindow(QMainWindow):
 
         def success(result: Any) -> None:
             self._public_info_busy = False
+            previous_public_info = self.public_info
             self.public_info = result
             if self._disconnected_kill_switch_may_block():
                 self._show_suppressed_public_info()
@@ -3332,12 +4533,17 @@ class MainWindow(QMainWindow):
                     public_country_name(result.country_code, language())
                 )
             self.ip_refresh_button.setEnabled(True)
-            self.log(
-                "info",
-                "log.public_info",
-                ip=mask_ip_address(result.ip_address),
-                country=public_country_name(result.country_code, language()),
-            )
+            # Automatic lifecycle/status refreshes can legitimately reconfirm
+            # the same public endpoint in quick succession. Keep the network
+            # check itself, but avoid duplicate Live Log noise when nothing
+            # changed. An explicit user refresh (show_errors=True) always logs.
+            if show_errors or previous_public_info != result:
+                self.log(
+                    "info",
+                    "log.public_info",
+                    ip=mask_ip_address(result.ip_address),
+                    country=public_country_name(result.country_code, language()),
+                )
 
         def failure(error: BaseException) -> None:
             self._public_info_busy = False
@@ -3385,16 +4591,30 @@ class MainWindow(QMainWindow):
             return
 
         menu = QMenu()
+        network_state_known = True
         try:
             connected = network_manager.is_connected()
-        except BaseException:
-            connected = False
-        disconnected_lock = self._disconnected_kill_switch_may_block(
-            connected=connected,
+        except Exception:
+            network_state_known = False
+            connected = bool(self._last_connected_state)
+        disconnected_lock = (
+            self._disconnected_kill_switch_may_block(connected=connected)
+            if network_state_known
+            else self.kill_switch_runtime.feature_enabled
         )
 
         state = self._kill_switch_view_state
-        status_action = QAction(tr(state.tray_status_key), menu)
+        if connected:
+            active_region = self._region_by_id(self._active_region_id)
+            active_name = (
+                localized_region_name(active_region, language())
+                if active_region is not None
+                else self._active_region_fallback or tr("common.unknown")
+            )
+            tray_status_text = tr("tray.status_connected", region=active_name)
+        else:
+            tray_status_text = tr("tray.status_disconnected")
+        status_action = QAction(tray_status_text, menu)
         status_action.setIcon(status_dot_icon(state.icon_state))
         # Indicator only: one colored icon, no duplicate text bullet, and no
         # click action.
@@ -3404,14 +4624,19 @@ class MainWindow(QMainWindow):
 
         if connected:
             disconnect_action = QAction(tr("connection.disconnect"), menu)
-            disconnect_action.setEnabled(not self._connection_busy)
+            disconnect_action.setEnabled(
+                network_state_known and not self._connection_busy
+            )
             disconnect_action.triggered.connect(
                 lambda checked=False: self.disconnect()
             )
             menu.addAction(disconnect_action)
         else:
             connect_action = QAction(menu)
-            if disconnected_lock:
+            if not network_state_known:
+                connect_action.setText(tr("connection.connect"))
+                connect_action.setEnabled(False)
+            elif disconnected_lock:
                 reconnect_ready = self._protected_reconnect_context_available()
                 connect_action.setText(
                     tr(
@@ -3462,7 +4687,8 @@ class MainWindow(QMainWindow):
             tr("tray.switch_server") if connected else tr("tray.connect_with")
         )
         locations_menu.setEnabled(
-            bool(self.regions)
+            network_state_known
+            and bool(self.regions)
             and not self._connection_busy
             and not disconnected_lock
         )
@@ -3489,7 +4715,7 @@ class MainWindow(QMainWindow):
                 for region in self.regions
                 if region.ping_ms is not None
                 and region.region_id != fastest.region_id
-            ][:10]
+            ][:20]
             for region in reachable:
                 action = QAction(
                     region_display_name(region, language()),
@@ -3588,6 +4814,20 @@ class MainWindow(QMainWindow):
         self.log_panel.setVisible(visible)
         self._log_visibility_changed(visible)
 
+    def _expanded_log_size(self) -> QSize:
+        # The Kill-Switch status card made the compact content taller than it
+        # was in 0.5.0.  Derive the expanded height from the actual log-panel
+        # minimum instead of assuming the old fixed 780px total.  This keeps
+        # the log action buttons below the text view across desktop themes.
+        extra_height = (
+            self.log_panel.minimumSizeHint().height()
+            + self.main_layout.spacing()
+        )
+        return QSize(
+            LOG_SIZE.width(),
+            max(LOG_SIZE.height(), COMPACT_SIZE.height() + extra_height),
+        )
+
     def _log_visibility_changed(self, visible: bool) -> None:
         self.live_log_action.blockSignals(True)
         self.live_log_action.setChecked(visible)
@@ -3596,13 +4836,15 @@ class MainWindow(QMainWindow):
 
         # Both modes are intentionally fixed-size. The expanded mode only
         # adds the log immediately below the connection section.
-        target = LOG_SIZE if visible else COMPACT_SIZE
+        target = self._expanded_log_size() if visible else COMPACT_SIZE
         self.setSizePolicy(
             QSizePolicy.Policy.Fixed,
             QSizePolicy.Policy.Fixed,
         )
         self.setFixedSize(target)
         self.settings.sync()
+        if visible:
+            QTimer.singleShot(0, self._scroll_live_log_to_end)
 
     def _apply_live_log_setting(self, *, initial: bool) -> None:
         del initial
@@ -3611,17 +4853,15 @@ class MainWindow(QMainWindow):
         self.live_log_action.setChecked(visible)
         self.live_log_action.blockSignals(False)
         self.log_panel.setVisible(visible)
-        self.setFixedSize(LOG_SIZE if visible else COMPACT_SIZE)
+        self.setFixedSize(self._expanded_log_size() if visible else COMPACT_SIZE)
+        if visible:
+            QTimer.singleShot(0, self._scroll_live_log_to_end)
 
     # ------------------------------------------------------------------
     # About and application lifecycle
     # ------------------------------------------------------------------
     def show_about(self) -> None:
-        QMessageBox.about(
-            self,
-            tr("about.title"),
-            tr("about.body", version=__version__),
-        )
+        AboutDialog(self).exec()
 
     def show_window(self) -> None:
         self.show()
@@ -3630,6 +4870,8 @@ class MainWindow(QMainWindow):
         )
         self.raise_()
         self.activateWindow()
+        if self.log_panel.isVisible():
+            QTimer.singleShot(0, self._scroll_live_log_to_end)
 
     def request_quit(self) -> None:
         if self._stage4_preview:
@@ -3645,8 +4887,9 @@ class MainWindow(QMainWindow):
 
         try:
             connected = network_manager.is_connected()
-        except BaseException:
-            connected = False
+        except Exception as exc:
+            self._show_error(exc)
+            return
 
         if not connected:
             kill_switch_may_be_active = (
@@ -3661,6 +4904,11 @@ class MainWindow(QMainWindow):
                 self._recheck_kill_switch_status(
                     after_absent=self._final_quit,
                     announce_absent=False,
+                )
+                return
+            if self._ipv6_guard_expected():
+                self._release_ipv6_guard_after_unexpected_vpn_loss(
+                    after_release=self._final_quit,
                 )
                 return
             self._final_quit()
@@ -3694,6 +4942,7 @@ class MainWindow(QMainWindow):
 
     def _final_quit(self) -> None:
         self._close_kill_switch_session()
+        self._close_ipv6_guard_session()
         self._allow_close = True
         self.tray.hide()
         self.status_timer.stop()

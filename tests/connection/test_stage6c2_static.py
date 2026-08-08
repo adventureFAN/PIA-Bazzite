@@ -20,7 +20,7 @@ class Stage6C2StaticTests(unittest.TestCase):
     def test_emergency_reset_recheck_is_read_only_and_uses_fixed_client_status(self) -> None:
         source = GUI.read_text(encoding="utf-8")
         start = source.index("    def _recheck_kill_switch_status(")
-        end = source.index("    def _log_connection_events(", start)
+        end = source.index("    def emergency_reset(", start)
         method = source[start:end]
         self.assertIn("KillSwitchClient(timeout=120.0).status()", method)
         self.assertNotIn(".disable(", method)

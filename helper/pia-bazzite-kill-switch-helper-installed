@@ -21,6 +21,7 @@ EXIT_SAFETY = 6
 ACTIONS = {
     'status', 'enable', 'set-interfaces', 'set-endpoints',
     'add-endpoint', 'remove-endpoint', 'disable', 'emergency-reset',
+    'ipv6-guard-status', 'ipv6-guard-enable', 'ipv6-guard-disable',
 }
 EXPECTED_FILES = {
     'pia-bazzite-kill-switch-helper': 0o755,

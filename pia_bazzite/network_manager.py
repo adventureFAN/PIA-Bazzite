@@ -11,6 +11,7 @@ from .app_errors import AppError
 
 CONNECTION_NAME = "PIA Bazzite"
 INTERFACE_NAME = "piabazzite"
+IPV4_PROBE_TARGET = "1.1.1.1"
 
 
 class NetworkManagerError(AppError):
@@ -85,11 +86,8 @@ def connection_state() -> ConnectionState:
     ensure_available()
     completed = _run(
         ["nmcli", "-t", "-f", "UUID,NAME,TYPE", "connection", "show", "--active"],
-        check=False,
         timeout=10,
     )
-    if completed.returncode != 0:
-        return ConnectionState(False)
     for line in completed.stdout.splitlines():
         parts = line.split(":", 2)
         if len(parts) != 3:
@@ -145,11 +143,8 @@ def _normalize_profile_uuid(value: str) -> str:
 def _profile_is_available(profile_uuid: str) -> bool:
     completed = _run(
         ["nmcli", "-t", "-f", "UUID,NAME,TYPE", "connection", "show"],
-        check=False,
         timeout=15,
     )
-    if completed.returncode != 0:
-        return False
     for line in completed.stdout.splitlines():
         parts = line.split(":", 2)
         if len(parts) != 3:
@@ -194,11 +189,8 @@ def connect(config_path: Path) -> str:
     ])
     _run([
         "nmcli", "connection", "modify", CONNECTION_NAME,
-        "ipv6.method", "manual",
-        "ipv6.addresses", "fd42:5049:4100::3/128",
-        "ipv6.routes", "::/0 type=blackhole",
-        "ipv6.never-default", "no",
-        "ipv6.may-fail", "yes",
+        "ipv6.method", "disabled",
+        "ipv6.never-default", "yes",
     ])
     _run(
         ["nmcli", "connection", "up", "id", CONNECTION_NAME],
@@ -210,6 +202,20 @@ def connect(config_path: Path) -> str:
         raise NetworkManagerError(
             "error.vpn_not_active.title",
             "error.vpn_not_active.message",
+        )
+    if not vpn_ipv4_route_active():
+        _run(
+            ["nmcli", "connection", "down", "uuid", state.uuid],
+            check=False,
+            timeout=30,
+        )
+        raise NetworkManagerError(
+            "error.vpn_not_active.title",
+            "error.vpn_not_active.message",
+            details=(
+                "The PIA profile became active, but the effective public IPv4 route "
+                "did not select the PIA WireGuard interface. The VPN was disconnected again."
+            ),
         )
     return state.uuid
 
@@ -243,6 +249,20 @@ def reconnect(profile_uuid: str) -> str:
             "error.vpn_not_active.message",
             details="NetworkManager did not reactivate the requested profile UUID.",
         )
+    if not vpn_ipv4_route_active():
+        _run(
+            ["nmcli", "connection", "down", "uuid", state.uuid],
+            check=False,
+            timeout=30,
+        )
+        raise NetworkManagerError(
+            "error.vpn_not_active.title",
+            "error.vpn_not_active.message",
+            details=(
+                "The PIA profile was reactivated, but the effective public IPv4 route "
+                "did not select the PIA WireGuard interface. The VPN was disconnected again."
+            ),
+        )
     return state.uuid
 
 
@@ -258,21 +278,36 @@ def disconnect(profile_uuid: str = "") -> None:
         timeout=30,
     )
     if completed.returncode != 0:
+        # Do not trust localized nmcli error prose as proof that the VPN is
+        # absent.  Re-read the fixed active-state query and accept the failed
+        # down operation only when absence is independently verified.
+        verified = connection_state()
+        if not verified.connected:
+            return
         detail = (completed.stderr or completed.stdout).strip()
-        if "not active" not in detail.casefold() and "nicht aktiv" not in detail.casefold():
-            raise NetworkManagerError(
-                "error.disconnect.title",
-                "error.disconnect.message",
-                details=detail,
-            )
+        raise NetworkManagerError(
+            "error.disconnect.title",
+            "error.disconnect.message",
+            details=detail or "NetworkManager still reports the PIA VPN as active.",
+        )
 
 
-def ipv6_blackhole_active() -> bool:
+
+def vpn_ipv4_route_active() -> bool:
+    """Return True only when public IPv4 selects the fixed PIA interface."""
+
     if shutil.which("ip") is None:
         return False
-    completed = _run(
-        ["ip", "-6", "route", "show", "type", "blackhole", "default"],
+    selected = _run(
+        ["ip", "-4", "route", "get", IPV4_PROBE_TARGET],
         check=False,
         timeout=10,
     )
-    return completed.returncode == 0 and "blackhole default" in completed.stdout
+    if selected.returncode != 0:
+        return False
+    fields = selected.stdout.strip().split()
+    try:
+        index = fields.index("dev")
+        return fields[index + 1] == INTERFACE_NAME
+    except (ValueError, IndexError):
+        return False

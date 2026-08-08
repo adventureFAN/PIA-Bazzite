@@ -28,6 +28,9 @@ _ACTION_FIELDS: Mapping[str, frozenset[str]] = {
     "remove-endpoint": frozenset({"endpoint"}),
     "disable": frozenset(),
     "emergency-reset": frozenset(),
+    "ipv6-guard-status": frozenset(),
+    "ipv6-guard-enable": frozenset(),
+    "ipv6-guard-disable": frozenset(),
     "close": frozenset(),
 }
 

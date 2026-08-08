@@ -40,15 +40,7 @@ def crash_recovery_path() -> Path:
 
 
 def create_settings() -> QSettings:
-    settings = QSettings(str(config_dir() / "settings.ini"), QSettings.Format.IniFormat)
-    if not settings.value("migration/v04_complete", False, type=bool):
-        old = QSettings("AlexTools", "PIA Bazzite")
-        for key in old.allKeys():
-            if not settings.contains(key):
-                settings.setValue(key, old.value(key))
-        settings.setValue("migration/v04_complete", True)
-        settings.sync()
-    return settings
+    return QSettings(str(config_dir() / "settings.ini"), QSettings.Format.IniFormat)
 
 
 def bool_value(settings: QSettings, key: str, default: bool) -> bool:

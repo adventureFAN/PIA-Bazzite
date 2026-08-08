@@ -10,10 +10,10 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from PySide6.QtCore import QCoreApplication, QSettings, QSize, QTimer
+from PySide6.QtCore import QCoreApplication, QPoint, QSettings, QTimer
 from PySide6.QtWidgets import QApplication
 
-from pia_bazzite.gui import MainWindow
+from pia_bazzite.gui import COMPACT_SIZE, LOG_SIZE, MainWindow
 from pia_bazzite.i18n import set_language, tr
 from pia_bazzite.kill_switch_state import KillSwitchMode
 from pia_bazzite.theme import ThemeController
@@ -104,8 +104,29 @@ def main() -> int:
             expected_armed_menu = tr("kill_switch.state.armed").replace("&", "&&")
             if window.preview_actions[1].text() != expected_armed_menu:
                 raise RuntimeError("Preview menu did not preserve the literal ampersand.")
-            if window.size() != QSize(760, 780):
-                raise RuntimeError("Expanded preview window has an unexpected size.")
+            expected_size = window._expanded_log_size()
+            if window.size() != expected_size:
+                raise RuntimeError("Expanded preview window did not apply its computed size.")
+            if window.width() != LOG_SIZE.width():
+                raise RuntimeError("Expanded preview window has an unexpected width.")
+            if window.height() < LOG_SIZE.height():
+                raise RuntimeError("Expanded preview window is shorter than the legacy minimum.")
+            if window.height() <= COMPACT_SIZE.height():
+                raise RuntimeError("Expanded preview window did not grow beyond compact mode.")
+            log_bottom = window.log_view.mapTo(
+                window.log_panel,
+                QPoint(0, window.log_view.height()),
+            ).y()
+            button_top = min(
+                button.mapTo(window.log_panel, QPoint(0, 0)).y()
+                for button in (
+                    window.log_copy_button,
+                    window.log_save_button,
+                    window.log_clear_button,
+                )
+            )
+            if button_top < log_bottom:
+                raise RuntimeError("Live Log action buttons overlap the log text view.")
             QTimer.singleShot(0, app.quit)
         else:
             window.show()

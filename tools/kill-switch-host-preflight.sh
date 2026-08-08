@@ -217,12 +217,11 @@ else
   printf 'IPv6: none shown\n'
 fi
 
-if ip -6 route show type blackhole default 2>/dev/null \
-    | grep -q 'blackhole default'; then
-  pass "PIA Bazzite IPv6 blackhole protection is active"
-else
-  warn "the expected IPv6 blackhole route was not found"
-fi
+# 0.6.0 no longer relies on a NetworkManager IPv6 blackhole route.  Real
+# dual-stack Bazzite testing proved that route-only containment was not
+# effective.  Full Kill Switch tests verify IPv6 at the nftables boundary;
+# ordinary VPN mode uses the separate helper-owned IPv6-only guard.
+pass "IPv6 protection is firewall-owned; no NetworkManager blackhole route is required"
 printf '\n'
 
 printf '%s\n' '--- Firewall coexistence ---'

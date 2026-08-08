@@ -116,3 +116,23 @@ Run the non-privileged regression test first:
 The real host test is documented separately in
 `docs/kill-switch/KILL_SWITCH_CONNECTION_STAGE5B.md` and must be run only after
 the self-test succeeds.
+
+## Stage 8C.3 normal-VPN IPv6 guard foundation
+
+Real dual-stack Bazzite testing proved that NetworkManager route-only containment
+cannot be relied on for the ordinary VPN path: both the stored blackhole route
+and a temporary sink-route experiment still left public IPv6 selecting the
+physical interface. A separate isolated real-host nftables probe then proved a
+minimal IPv6-only firewall guard: IPv4 remained usable, public IPv6 was blocked,
+the exact rule counter increased, and IPv6 recovered after guard removal.
+
+The production helper now exposes three additional fieldless actions over the
+same fixed protocol/session boundary: `ipv6-guard-status`,
+`ipv6-guard-enable`, and `ipv6-guard-disable`. They own only the separate fixed
+`pia_bazzite_ipv6_guard` table. The guard cannot accept arbitrary interfaces,
+endpoints, table names, or nftables text, and it does not modify the full
+`pia_bazzite_killswitch` table.
+
+This is the privileged foundation only. GUI/orchestration integration remains a
+separate release substage so lifecycle, crash handling, disconnect order, and
+interaction with the full Session Kill Switch can be tested independently.

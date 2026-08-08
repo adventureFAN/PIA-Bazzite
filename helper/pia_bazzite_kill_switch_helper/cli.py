@@ -12,13 +12,18 @@ from typing import Iterator, Sequence
 
 from .core import (
     HELPER_STAGE,
+    IPV6_GUARD_TABLE_NAME,
     TABLE_NAME,
     ValidationError,
     disabled_status,
+    ipv6_guard_disabled_status,
     parse_endpoint,
+    parse_ipv6_guard_status_json,
     parse_status_json,
     render_add_endpoint,
     render_disable_ruleset,
+    render_ipv6_guard_disable_ruleset,
+    render_ipv6_guard_enable_ruleset,
     render_enable_ruleset,
     render_remove_endpoint,
     render_set_endpoints,
@@ -93,6 +98,18 @@ def _parser() -> argparse.ArgumentParser:
     subparsers.add_parser(
         "emergency-reset",
         help="Idempotently remove only the fixed candidate table (explicit recovery action).",
+    )
+    subparsers.add_parser(
+        "ipv6-guard-status",
+        help="Read and verify the fixed IPv6-only guard table.",
+    )
+    subparsers.add_parser(
+        "ipv6-guard-enable",
+        help="Atomically replace the fixed IPv6-only guard table.",
+    )
+    subparsers.add_parser(
+        "ipv6-guard-disable",
+        help="Idempotently remove only the fixed IPv6-only guard table.",
     )
     return parser
 
@@ -176,6 +193,29 @@ def _status(runner: NftRunner, *, action: str) -> tuple[dict[str, object], int]:
     return payload, EXIT_VERIFY
 
 
+def _ipv6_guard_status(
+    runner: NftRunner,
+    *,
+    action: str,
+) -> tuple[dict[str, object], int]:
+    if not runner.table_exists(IPV6_GUARD_TABLE_NAME):
+        status = ipv6_guard_disabled_status()
+        return success_payload(action=action, helper_stage=HELPER_STAGE, fields=status), 0
+
+    result = runner.list_table_json(IPV6_GUARD_TABLE_NAME)
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout or "could not read IPv6 guard table").strip()
+        raise NftError(detail)
+    status = parse_ipv6_guard_status_json(result.stdout)
+    if status["verified"]:
+        return success_payload(action=action, helper_stage=HELPER_STAGE, fields=status), 0
+    payload = success_payload(action=action, helper_stage=HELPER_STAGE, fields=status)
+    payload["ok"] = False
+    payload["error"] = "verification"
+    payload["message"] = "The IPv6 guard table exists but failed structural verification."
+    return payload, EXIT_VERIFY
+
+
 def main(
     argv: Sequence[str] | None = None,
     *,
@@ -203,7 +243,11 @@ def main(
             script = render_remove_endpoint(parse_endpoint(args.endpoint))
         elif args.action in {"disable", "emergency-reset"}:
             script = render_disable_ruleset()
-        elif args.action != "status":  # pragma: no cover
+        elif args.action == "ipv6-guard-enable":
+            script = render_ipv6_guard_enable_ruleset()
+        elif args.action == "ipv6-guard-disable":
+            script = render_ipv6_guard_disable_ruleset()
+        elif args.action not in {"status", "ipv6-guard-status"}:  # pragma: no cover
             raise ValidationError(f"Unsupported action: {args.action}")
 
         _require_root()
@@ -215,12 +259,31 @@ def main(
             payload, code = _status(runner, action=args.action)
             _emit(payload, stream=sys.stdout if code == 0 else sys.stderr)
             return code
+        if args.action == "ipv6-guard-status":
+            payload, code = _ipv6_guard_status(runner, action=args.action)
+            _emit(payload, stream=sys.stdout if code == 0 else sys.stderr)
+            return code
 
         assert script is not None
         with _exclusive_lock():
+            # The normal-mode IPv6 guard and the full Session Kill Switch are
+            # deliberately separate protection modes.  Refuse to arm either
+            # one while the other table exists; this keeps even concurrent
+            # authenticated sessions from creating an ambiguous combined state.
+            if args.action == "ipv6-guard-enable" and runner.table_exists(TABLE_NAME):
+                raise SafetyBoundaryError(
+                    "Refusing to enable the IPv6-only guard while the full Session Kill Switch table exists."
+                )
+            if args.action == "enable" and runner.table_exists(IPV6_GUARD_TABLE_NAME):
+                raise SafetyBoundaryError(
+                    "Refusing to enable the full Session Kill Switch while the IPv6-only guard table exists."
+                )
             runner.check_script(script)
             runner.apply_script(script)
-            payload, code = _status(runner, action=args.action)
+            if args.action.startswith("ipv6-guard-"):
+                payload, code = _ipv6_guard_status(runner, action=args.action)
+            else:
+                payload, code = _status(runner, action=args.action)
             _emit(payload, stream=sys.stdout if code == 0 else sys.stderr)
             return code
 

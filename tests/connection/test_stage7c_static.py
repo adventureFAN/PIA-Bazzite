@@ -16,14 +16,15 @@ EN = ROOT / "pia_bazzite" / "resources" / "i18n" / "en.json"
 
 
 class Stage7CStaticTests(unittest.TestCase):
-    def test_startup_reconciliation_is_automatic_for_enabled_or_recorded_state(self) -> None:
+    def test_startup_reconciliation_is_automatic_for_persisted_recovery_hint(self) -> None:
         source = GUI.read_text(encoding="utf-8")
         self.assertIn("QTimer.singleShot(75, self._reconcile_kill_switch_startup)", source)
         start = source.index("    def _startup_kill_switch_reconciliation_required(")
         end = source.index("    def _reconcile_kill_switch_startup(", start)
         gate = source[start:end]
-        self.assertIn("self.kill_switch_runtime.feature_enabled", gate)
+        self.assertIn("self._kill_switch_reconciliation_marker_required()", gate)
         self.assertIn("record_path.exists() or record_path.is_symlink()", gate)
+        self.assertNotIn("self.kill_switch_runtime.feature_enabled", gate)
 
     def test_adoption_uses_two_stable_helper_and_networkmanager_snapshots(self) -> None:
         source = GUI.read_text(encoding="utf-8")

@@ -10,16 +10,25 @@ HELPER_STAGE = 5
 SCHEMA_VERSION = 1
 TABLE_NAME = "pia_bazzite_killswitch"
 CHAIN_NAME = "output"
+IPV6_GUARD_TABLE_NAME = "pia_bazzite_ipv6_guard"
+IPV6_GUARD_CHAIN_NAME = "output"
 PHYSICAL_INTERFACE_SET = "physical_interfaces"
 ENDPOINT_SET_V4 = "allowed_endpoints_v4"
 ENDPOINT_SET_V6 = "allowed_endpoints_v6"
 VPN_INTERFACE = "piabazzite"
 TABLE_COMMENT = "PIA Bazzite session kill switch production v1"
 CHAIN_COMMENT = "PIA Bazzite session kill switch output production v1"
+IPV6_GUARD_TABLE_COMMENT = "PIA Bazzite IPv6-only guard production v1"
+IPV6_GUARD_CHAIN_COMMENT = "PIA Bazzite IPv6-only guard output production v1"
 
 MAX_INTERFACES = 8
 MAX_ENDPOINTS = 32
 _INTERFACE_PATTERN = re.compile(r"^[A-Za-z0-9_.:-]{1,15}$")
+
+IPV6_GUARD_RULE_COMMENTS = {
+    "pia-bazzite:ipv6-guard:v1:loopback",
+    "pia-bazzite:ipv6-guard:v1:block-ipv6",
+}
 
 CORE_RULE_COMMENTS = {
     "pia-bazzite:v1:loopback",
@@ -273,6 +282,34 @@ def render_disable_ruleset() -> str:
     return f"destroy table inet {TABLE_NAME}\n"
 
 
+def render_ipv6_guard_enable_ruleset() -> str:
+    """Render the fixed IPv6-only guard proven by the real-host probe.
+
+    The guard deliberately leaves IPv4 untouched and blocks every outbound
+    IPv6 packet except loopback.  It owns a separate fixed nftables table so
+    it cannot be mistaken for, weaken, or mutate the full session Kill Switch.
+    """
+
+    return "\n".join([
+        f"destroy table inet {IPV6_GUARD_TABLE_NAME}",
+        f"table inet {IPV6_GUARD_TABLE_NAME} {{",
+        f'  comment "{IPV6_GUARD_TABLE_COMMENT}"',
+        f"  chain {IPV6_GUARD_CHAIN_NAME} {{",
+        "    type filter hook output priority -110; policy accept;",
+        f'    comment "{IPV6_GUARD_CHAIN_COMMENT}"',
+        '    oifname "lo" counter accept comment "pia-bazzite:ipv6-guard:v1:loopback"',
+        '    meta nfproto ipv6 counter reject with icmpx type admin-prohibited '
+        'comment "pia-bazzite:ipv6-guard:v1:block-ipv6"',
+        "  }",
+        "}",
+        "",
+    ])
+
+
+def render_ipv6_guard_disable_ruleset() -> str:
+    return f"destroy table inet {IPV6_GUARD_TABLE_NAME}\n"
+
+
 def _set_elements(set_object: dict[str, Any]) -> list[Any]:
     elements = set_object.get("elem", [])
     if elements is None:
@@ -462,6 +499,112 @@ def parse_status_json(payload: str) -> dict[str, Any]:
             "add-endpoint",
             "remove-endpoint",
         ],
+    }
+
+
+def parse_ipv6_guard_status_json(payload: str) -> dict[str, Any]:
+    try:
+        document = json.loads(payload)
+    except json.JSONDecodeError as exc:
+        raise ValidationError(f"nftables returned invalid JSON: {exc}") from exc
+
+    objects = document.get("nftables")
+    if not isinstance(objects, list):
+        raise ValidationError("nftables JSON does not contain an object list.")
+
+    table_found = False
+    table_comment = ""
+    chain: dict[str, Any] | None = None
+    rule_comments: list[str] = []
+
+    for item in objects:
+        if not isinstance(item, dict):
+            continue
+        table_obj = item.get("table")
+        if (
+            isinstance(table_obj, dict)
+            and table_obj.get("family") == "inet"
+            and table_obj.get("name") == IPV6_GUARD_TABLE_NAME
+        ):
+            table_found = True
+            table_comment = str(table_obj.get("comment", ""))
+
+        chain_obj = item.get("chain")
+        if (
+            isinstance(chain_obj, dict)
+            and chain_obj.get("family") == "inet"
+            and chain_obj.get("table") == IPV6_GUARD_TABLE_NAME
+            and chain_obj.get("name") == IPV6_GUARD_CHAIN_NAME
+        ):
+            chain = chain_obj
+
+        rule_obj = item.get("rule")
+        if (
+            isinstance(rule_obj, dict)
+            and rule_obj.get("family") == "inet"
+            and rule_obj.get("table") == IPV6_GUARD_TABLE_NAME
+            and rule_obj.get("chain") == IPV6_GUARD_CHAIN_NAME
+        ):
+            comment = rule_obj.get("comment")
+            if isinstance(comment, str):
+                rule_comments.append(comment)
+            else:
+                rule_comments.append("")
+
+    problems: list[str] = []
+    if not table_found:
+        problems.append("IPv6 guard table is missing")
+    if table_found and table_comment != IPV6_GUARD_TABLE_COMMENT:
+        problems.append("IPv6 guard table ownership marker is missing or incorrect")
+
+    if chain is None:
+        problems.append("IPv6 guard output base chain is missing")
+    else:
+        if chain.get("type") != "filter":
+            problems.append("IPv6 guard output chain is not a filter chain")
+        if chain.get("hook") != "output":
+            problems.append("IPv6 guard output chain has the wrong hook")
+        if chain.get("policy") != "accept":
+            problems.append("IPv6 guard output chain has the wrong policy")
+        priority = chain.get("prio", chain.get("priority"))
+        if priority not in (-110, "-110"):
+            problems.append("IPv6 guard output chain has the wrong priority")
+        if chain.get("comment", "") != IPV6_GUARD_CHAIN_COMMENT:
+            problems.append("IPv6 guard output chain ownership marker is missing or incorrect")
+
+    observed_comments = set(rule_comments)
+    for comment in sorted(IPV6_GUARD_RULE_COMMENTS - observed_comments):
+        problems.append(f"required IPv6 guard rule marker is missing: {comment}")
+    if len(rule_comments) != len(IPV6_GUARD_RULE_COMMENTS):
+        problems.append("IPv6 guard output chain contains an unexpected number of rules")
+    unexpected = sorted(observed_comments - IPV6_GUARD_RULE_COMMENTS)
+    if unexpected:
+        problems.append("unexpected IPv6 guard rule marker(s): " + ", ".join(unexpected))
+
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "helper_stage": HELPER_STAGE,
+        "table": IPV6_GUARD_TABLE_NAME,
+        "table_generation": 1,
+        "present": table_found,
+        "verified": table_found and not problems,
+        "state": "active" if table_found and not problems else "error",
+        "problems": problems,
+        "capabilities": ["ipv6-only-guard"],
+    }
+
+
+def ipv6_guard_disabled_status() -> dict[str, Any]:
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "helper_stage": HELPER_STAGE,
+        "table": IPV6_GUARD_TABLE_NAME,
+        "table_generation": 1,
+        "present": False,
+        "verified": True,
+        "state": "disabled",
+        "problems": [],
+        "capabilities": ["ipv6-only-guard"],
     }
 
 
