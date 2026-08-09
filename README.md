@@ -37,11 +37,19 @@ While disconnected, the lookup is performed only when you explicitly use the
 public-IP refresh control. Automatic refreshes are limited to a verified VPN
 connection.
 
+> [!IMPORTANT]
+> **Kill Switch scope:** PIA Bazzite's optional Kill Switch protects the current
+> running session. If the VPN tunnel or PIA Bazzite GUI fails while the system
+> remains running, the firewall stays fail-closed and can be verified/adopted by
+> the app after restart. A full system reboot, kernel crash, or power loss clears
+> this runtime `nftables` state. PIA Bazzite is not an early-boot firewall: after
+> boot, its Kill Switch protection is not active until PIA Bazzite runs and the
+> Kill Switch is activated again.
+
 ## Important limitations
 
-The optional Kill Switch is a **session Kill Switch**. It is designed to remain
-fail-closed across tunnel loss and application crashes, but it is not a persistent
-early-boot firewall and is not intended to survive a full system reboot.
+The optional Kill Switch is intentionally a **session Kill Switch**, not
+boot-persistent protection. The security boundary is described explicitly above.
 
 While the Session Kill Switch is active, Bazzite/KDE may temporarily report the
 underlying network as **Limited connectivity**. This can happen because

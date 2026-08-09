@@ -1026,3 +1026,38 @@ After the freeze commit is pushed and CI is green, create/push tag `v0.6.0`. Do 
 retag a different commit. Verify the resulting GitHub release contains exactly the
 expected `PIA-Bazzite-0.6.0-x86_64.AppImage` and its `.sha256` sidecar, then perform
 one final download/checksum/version smoke check of the published asset.
+
+### Post-release 0.6.0 external review and documentation clarification (2026-08-09)
+
+An independent post-release code review reported no release-blocking functional or
+security defects. Two points were investigated:
+
+- **Session Kill Switch reboot scope:** the reviewer correctly highlighted that
+  the runtime `nftables` protection is not persistent across a full reboot, kernel
+  crash or power loss. This was already documented under README limitations, but
+  the boundary is important enough to surface more prominently. `README.md` now
+  contains an explicit `Kill Switch scope` callout: fail-closed protection survives
+  tunnel/GUI failure while the kernel remains running, but it is not an early-boot
+  firewall and is not active again after boot until PIA Bazzite runs and activates
+  the Kill Switch. This is a documentation-only post-release clarification and does
+  not change 0.6.0 runtime behavior.
+- **Helper checksum-before-import concern:** the reviewer noticed that
+  `helper/pia_bazzite_kill_switch_helper/installed_entry.py` has package imports at
+  module scope while its own `verify_installation()` call occurs later in `main()`.
+  On re-checking the actual production launch path, this is already protected by
+  the standalone installed bootstrap
+  `helper/pia-bazzite-kill-switch-helper-installed`, which is installed as the fixed
+  `/usr/local/libexec/pia-bazzite/pia-bazzite-kill-switch-helper`. That bootstrap
+  uses only the standard library, validates the fixed root-owned installation and
+  checksum manifest in `_verify_installation()`, and only **after that** imports
+  `pia_bazzite_kill_switch_helper.installed_entry`. The invariant is explicitly
+  covered by
+  `tests/polkit/test_installed_helper.py::InstalledFilesStaticTests::test_launcher_verifies_before_importing_installed_package`.
+  Therefore this is **not** an outstanding 0.6.1 hardening defect in the released
+  production path. Preserve this pre-import bootstrap boundary in future helper
+  refactors.
+
+Release policy after 0.6.0 remains conservative: do not create 0.6.1 solely for
+this documentation clarification. Accumulate real bug fixes/hardening changes and
+ship a maintenance release when there is enough reason to do so.
+
