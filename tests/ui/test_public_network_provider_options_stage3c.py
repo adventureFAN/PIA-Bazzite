@@ -39,7 +39,7 @@ class Stage3CProviderOptionsTests(unittest.TestCase):
             public_network.SELECTABLE_ONLINE_PUBLIC_NETWORK_PROVIDER_IDS,
         )
 
-    def test_stage3c_interim_default_is_geojs(self) -> None:
+    def test_stage3c_default_is_geojs(self) -> None:
         self.assertEqual(
             public_network.DEFAULT_ONLINE_PUBLIC_NETWORK_PROVIDER,
             public_network.GEOJS_PROVIDER,
@@ -136,6 +136,8 @@ class Stage3CProviderOptionsTests(unittest.TestCase):
             self.assertIn(key, self.en)
         self.assertIn("öffentlichen IP-Adresse", self.de["options.public_info_provider_tooltip"])
         self.assertIn("public IP address", self.en["options.public_info_provider_tooltip"])
+        self.assertEqual(self.de["options.provider.geojs"], "GeoJS (Standard)")
+        self.assertEqual(self.en["options.provider.geojs"], "GeoJS (Default)")
         self.assertEqual(set(self.en), set(self.de))
 
 

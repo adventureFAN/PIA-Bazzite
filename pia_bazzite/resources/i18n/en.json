@@ -494,6 +494,6 @@
   "options.public_info_provider": "IP/location detection:",
   "options.public_info_provider_tooltip": "Online service used to determine the public IP address and detected country. The service can see the public IP address during the lookup.",
   "options.provider.freeipapi": "FreeIPAPI",
-  "options.provider.geojs": "GeoJS",
+  "options.provider.geojs": "GeoJS (Default)",
   "options.provider.ipwhois": "ipwho.is"
 }

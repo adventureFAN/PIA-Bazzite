@@ -494,6 +494,6 @@
   "options.public_info_provider": "IP-/Standorterkennung:",
   "options.public_info_provider_tooltip": "Online-Dienst zur Ermittlung der öffentlichen IP-Adresse und des erkannten Landes. Der Dienst sieht dabei die öffentliche IP-Adresse.",
   "options.provider.freeipapi": "FreeIPAPI",
-  "options.provider.geojs": "GeoJS",
+  "options.provider.geojs": "GeoJS (Standard)",
   "options.provider.ipwhois": "ipwho.is"
 }
