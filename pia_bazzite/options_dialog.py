@@ -16,11 +16,18 @@ from PySide6.QtWidgets import (
 )
 
 from .i18n import language, tr
+from .public_network import (
+    DEFAULT_ONLINE_PUBLIC_NETWORK_PROVIDER,
+    FREEIPAPI_PROVIDER,
+    GEOJS_PROVIDER,
+    IPWHOIS_PROVIDER,
+    normalize_online_public_network_provider,
+)
 from .settings import bool_value
 
 
 OPTIONS_DIALOG_WIDTH = 560
-OPTIONS_DIALOG_HEIGHT = 330
+OPTIONS_DIALOG_HEIGHT = 410
 OPTIONS_LABEL_COLUMN_WIDTH = 230
 OPTIONS_FIELD_WIDTH = 250
 
@@ -31,6 +38,7 @@ class OptionsValues:
     theme: str
     quit_behavior: str
     tray_enabled: bool
+    public_network_provider: str
 
 
 class OptionsDialog(QDialog):
@@ -82,6 +90,31 @@ class OptionsDialog(QDialog):
         )
         self.tray_checkbox.setToolTip(tr("tray.enabled_tooltip"))
 
+        self.public_network_provider_combo = QComboBox()
+        self._configure_combo(self.public_network_provider_combo)
+        self.public_network_provider_combo.addItem(
+            tr("options.provider.freeipapi"), FREEIPAPI_PROVIDER
+        )
+        self.public_network_provider_combo.addItem(
+            tr("options.provider.geojs"), GEOJS_PROVIDER
+        )
+        self.public_network_provider_combo.addItem(
+            tr("options.provider.ipwhois"), IPWHOIS_PROVIDER
+        )
+        self.public_network_provider_combo.setToolTip(
+            tr("options.public_info_provider_tooltip")
+        )
+        self._select_data(
+            self.public_network_provider_combo,
+            normalize_online_public_network_provider(
+                settings.value(
+                    "network/public_info_provider",
+                    DEFAULT_ONLINE_PUBLIC_NETWORK_PROVIDER,
+                )
+            ),
+            fallback=DEFAULT_ONLINE_PUBLIC_NETWORK_PROVIDER,
+        )
+
         general_group = QGroupBox(tr("options.general"))
         general_form = QFormLayout(general_group)
         general_form.setFieldGrowthPolicy(
@@ -96,6 +129,16 @@ class OptionsDialog(QDialog):
             self.quit_behavior_combo,
         )
         general_form.addRow(self._form_label(""), self.tray_checkbox)
+
+        network_group = QGroupBox(tr("options.network"))
+        network_form = QFormLayout(network_group)
+        network_form.setFieldGrowthPolicy(
+            QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow
+        )
+        network_form.addRow(
+            self._form_label(tr("options.public_info_provider")),
+            self.public_network_provider_combo,
+        )
 
         appearance_group = QGroupBox(tr("options.appearance"))
         appearance_form = QFormLayout(appearance_group)
@@ -124,6 +167,7 @@ class OptionsDialog(QDialog):
         layout.setContentsMargins(20, 18, 20, 16)
         layout.setSpacing(12)
         layout.addWidget(general_group)
+        layout.addWidget(network_group)
         layout.addWidget(appearance_group)
         layout.addStretch()
         layout.addWidget(buttons)
@@ -158,4 +202,7 @@ class OptionsDialog(QDialog):
             theme=str(self.theme_combo.currentData() or "system"),
             quit_behavior=str(self.quit_behavior_combo.currentData() or "ask"),
             tray_enabled=self.tray_checkbox.isChecked(),
+            public_network_provider=normalize_online_public_network_provider(
+                self.public_network_provider_combo.currentData()
+            ),
         )

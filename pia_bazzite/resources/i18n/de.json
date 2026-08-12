@@ -489,5 +489,11 @@
   "tray.status_disconnected": "Getrennt",
   "tray.switch_server": "Server wechseln …",
   "tray.unavailable_message": "Der Desktop stellt keinen Systembereich bereit. Die Option wurde deaktiviert.",
-  "tray.unavailable_title": "Systembereich nicht verfügbar"
+  "tray.unavailable_title": "Systembereich nicht verfügbar",
+  "options.network": "Netzwerk",
+  "options.public_info_provider": "IP-/Standorterkennung:",
+  "options.public_info_provider_tooltip": "Online-Dienst zur Ermittlung der öffentlichen IP-Adresse und des erkannten Landes. Der Dienst sieht dabei die öffentliche IP-Adresse.",
+  "options.provider.freeipapi": "FreeIPAPI",
+  "options.provider.geojs": "GeoJS",
+  "options.provider.ipwhois": "ipwho.is"
 }

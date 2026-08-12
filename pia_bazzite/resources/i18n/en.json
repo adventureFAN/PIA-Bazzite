@@ -489,5 +489,11 @@
   "tray.status_disconnected": "Disconnected",
   "tray.switch_server": "Switch server…",
   "tray.unavailable_message": "The desktop did not provide a system tray. The tray option was disabled.",
-  "tray.unavailable_title": "System tray unavailable"
+  "tray.unavailable_title": "System tray unavailable",
+  "options.network": "Network",
+  "options.public_info_provider": "IP/location detection:",
+  "options.public_info_provider_tooltip": "Online service used to determine the public IP address and detected country. The service can see the public IP address during the lookup.",
+  "options.provider.freeipapi": "FreeIPAPI",
+  "options.provider.geojs": "GeoJS",
+  "options.provider.ipwhois": "ipwho.is"
 }

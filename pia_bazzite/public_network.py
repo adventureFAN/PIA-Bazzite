@@ -24,12 +24,33 @@ PUBLIC_NETWORK_PROVIDER_IDS: Final[tuple[str, ...]] = (
     GEOJS_PROVIDER,
 )
 
+# Stage 3C exposes only the three maintained online candidates from the real
+# PIA location comparison.  GeoJS became the strongest observed candidate after
+# the later Nigeria virtual-location discriminator.  Legacy country.is and
+# Cloudflare adapters stay in the core for regression/research use, but are
+# intentionally not user choices.
+SELECTABLE_ONLINE_PUBLIC_NETWORK_PROVIDER_IDS: Final[tuple[str, ...]] = (
+    FREEIPAPI_PROVIDER,
+    GEOJS_PROVIDER,
+    IPWHOIS_PROVIDER,
+)
+DEFAULT_ONLINE_PUBLIC_NETWORK_PROVIDER: Final = GEOJS_PROVIDER
+
 COUNTRY_IS_URL: Final = "https://api.country.is/"
 CLOUDFLARE_TRACE_URL: Final = "https://cloudflare.com/cdn-cgi/trace"
 IPWHOIS_URL: Final = "https://ipwho.is/"
 FREEIPAPI_URL: Final = "https://free.freeipapi.com/api/json/"
 GEOJS_URL: Final = "https://get.geojs.io/v1/ip/geo.json"
 AMAZON_CHECK_IP_URL: Final = "https://checkip.amazonaws.com/"
+
+
+def normalize_online_public_network_provider(value: object) -> str:
+    """Return a safe selectable online provider ID for persisted settings."""
+
+    provider_id = str(value or "").strip().lower()
+    if provider_id in SELECTABLE_ONLINE_PUBLIC_NETWORK_PROVIDER_IDS:
+        return provider_id
+    return DEFAULT_ONLINE_PUBLIC_NETWORK_PROVIDER
 
 
 class PublicNetworkError(AppError):

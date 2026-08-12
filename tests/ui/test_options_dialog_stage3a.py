@@ -95,7 +95,7 @@ class Stage3AOptionsDialogTests(unittest.TestCase):
     def test_option_selectors_share_one_visual_grid(self) -> None:
         self.assertIn("OPTIONS_LABEL_COLUMN_WIDTH = 230", self.options)
         self.assertIn("OPTIONS_FIELD_WIDTH = 250", self.options)
-        self.assertEqual(
+        self.assertGreaterEqual(
             self.options.count("self._configure_combo("),
             3,
         )

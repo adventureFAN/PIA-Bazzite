@@ -119,6 +119,10 @@ from .models import PublicNetworkInfo, Region, SystemCheck
 from .network_paths import discover_physical_interface
 from .network_probes import NetworkProbeBaseline, NetworkProbeError
 from .options_dialog import OptionsDialog
+from .public_network import (
+    DEFAULT_ONLINE_PUBLIC_NETWORK_PROVIDER,
+    normalize_online_public_network_provider,
+)
 from .pia_api import (
     create_wireguard_config,
     fetch_public_network_info,
@@ -2176,6 +2180,12 @@ class MainWindow(QMainWindow):
         current_tray_enabled = bool_value(
             self.settings, "ui/tray_enabled", True
         )
+        current_public_network_provider = normalize_online_public_network_provider(
+            self.settings.value(
+                "network/public_info_provider",
+                DEFAULT_ONLINE_PUBLIC_NETWORK_PROVIDER,
+            )
+        )
 
         if values.language_code != language():
             self.change_language(values.language_code)
@@ -2185,6 +2195,15 @@ class MainWindow(QMainWindow):
             self.change_quit_behavior(values.quit_behavior)
         if values.tray_enabled != current_tray_enabled:
             self._tray_setting_changed(values.tray_enabled)
+        if values.public_network_provider != current_public_network_provider:
+            self.change_public_network_provider(values.public_network_provider)
+
+    def change_public_network_provider(self, provider_id: str) -> None:
+        normalized = normalize_online_public_network_provider(provider_id)
+        self.settings.setValue("network/public_info_provider", normalized)
+        self.settings.sync()
+        if not self._public_info_busy:
+            self.refresh_public_info(show_errors=False)
 
     def change_language(self, language_code: str) -> None:
         if language_code == language():
@@ -4830,8 +4849,14 @@ class MainWindow(QMainWindow):
             if show_errors:
                 self._show_error(error)
 
+        provider_id = normalize_online_public_network_provider(
+            self.settings.value(
+                "network/public_info_provider",
+                DEFAULT_ONLINE_PUBLIC_NETWORK_PROVIDER,
+            )
+        )
         self._run_worker(
-            fetch_public_network_info,
+            lambda: fetch_public_network_info(provider_id=provider_id),
             on_success=success,
             on_failure=failure,
         )
