@@ -1,171 +1,522 @@
-# PIA Bazzite — living project handoff
+# PIA Bazzite - Living HANDOFF
 
-This file is a **living handoff**, not a release note. Update it after every
-meaningful substage, architecture change, security decision, or roadmap change
-so a future development session can continue without reconstructing decisions
-from chat history.
+**Purpose:** Continuity document for future ChatGPT conversations and later PIA Bazzite development.
+**Last updated:** 2026-08-09
+**Current public stable release:** **PIA Bazzite 0.6.0**
+**Current development baseline:** **post-release 0.6.0 `main`**
+**Stable release tag:** `v0.6.0`
+**Stable release commit:** `4df051f` (`feat: prepare PIA Bazzite 0.6.0 release`)
+**Repository:** https://github.com/adventureFAN/PIA-Bazzite
+**License:** MIT
 
-## Current target
+> This document is intentionally more detailed than a normal README. It records architecture, security invariants, verified behavior, historical traps, release procedure, and working agreements so a new development chat does not have to reconstruct the project from old conversations.
 
-- Release target: **0.6.0**
-- Expected working branch: `feature/session-kill-switch` (verify in Git; review
-  archives intentionally do not contain `.git`)
-- Current phase: **Stage 8C.3B release-candidate regression is functionally complete through RC blocks 1–19 on real Bazzite. A14 is the collected final UX/recovery polish pass; its unprivileged authoritative self-test is green and it now awaits real-host AppImage rebuild plus focused UI validation before Stage 8D release freeze.**
-- Latest real-host milestone: **A13 passed the authoritative Bazzite self-test/rebuild and the remaining RC matrix passed through settings persistence, single-instance behavior, tray-disabled shutdown, suspend/resume, physical-network loss/recovery, external NetworkManager VPN disconnect/recovery, Polkit-cancel fail-safe behavior, offline start/manual refresh recovery, and final UI sanity.** No fail-open was observed. A14 changes only recovery UX/presentation, action visibility, authorization-cancel presentation, wording/tooltips, release docs, tests, and this handoff; it does not change the audited firewall/helper ordering.
+---
 
-## Proven before Stage 8C
+## 1. Project in one paragraph
 
-The real 0.6.0 AppImage was built and its SHA-256 sidecar verified. Its embedded
-helper bundle matched the manifest. Normal AppImage FUSE root-unreadability was
-handled through private normal-filesystem staging. A missing helper installed
-through explicit user confirmation + Polkit, an exact helper was reused without
-reinstallation, and a deliberately outdated helper required an explicit update.
+PIA Bazzite is an unofficial desktop client for Private Internet Access on Bazzite Linux. It creates native PIA WireGuard connections through NetworkManager, loads and measures PIA regions, provides a DE/EN Qt GUI and system-tray workflow, stores credentials through the Linux Secret Service keyring, and implements two separate firewall protections: a narrow IPv6-only guard for ordinary VPN connections and an optional fail-closed Session Kill Switch for IPv4, IPv6, and direct DNS paths. The application is distributed as an AppImage and deliberately keeps the GUI unprivileged; privileged `nftables` work is confined to a fixed, root-owned, checksummed helper installed through explicit user authorization.
 
-Stage 7 is the authoritative crash/recovery security foundation:
+PIA Bazzite is unofficial, not affiliated with Private Internet Access, and not endorsed by the Bazzite project.
 
-- Stage 7C.4: GUI SIGKILL persistence and automatic exact takeover passed; 50
-  independent sentinel samples showed no direct fallback.
-- Stage 7D: corrupt recovery record, unowned firewall lock, Emergency Reset and
-  clean restart passed; 47 independent sentinel samples showed no direct
-  fallback.
-- Older 7C.1–7C.3 host experiments are retained as history/regression evidence;
-  7C.4 is authoritative for process/transport takeover proof.
+---
 
-## Security invariants
+## 2. Current release state
 
-1. Session Kill Switch is fail-closed.
-2. Firewall protection is established before a protected VPN is started.
-3. Firewall release is allowed only after VPN absence and the expected blocked
-   path have been independently verified.
+PIA Bazzite **0.6.0 is publicly released on GitHub**.
+
+Release facts:
+
+- Publication date: **2026-08-08**.
+- Main release tag: `v0.6.0`.
+- Tagged release commit: `4df051f`.
+- Expected public assets:
+  - `PIA-Bazzite-0.6.0-x86_64.AppImage`
+  - `PIA-Bazzite-0.6.0-x86_64.AppImage.sha256`
+- The final release workflow builds from the exact tag commit, checks tag/version consistency, runs the release gate, builds/smoke-tests the AppImage, verifies the checksum sidecar, and publishes the GitHub Release.
+- The final 0.6.0 RC matrix passed on real Bazzite through blocks 1-19, including normal VPN, IPv6 containment, Session Kill Switch, protected reconnect/server switch, crash recovery, integrated reset, tray/exit behavior, settings persistence, single-instance behavior, suspend/resume, physical-network loss, external NetworkManager disconnect/recovery, Polkit cancellation, offline start/manual recovery, and final UI sanity.
+- No fail-open was observed in the final RC testing.
+- A post-release independent review found no release-blocking functional or security defect. It produced one documentation clarification about the Session Kill Switch reboot boundary and one checksum/import concern that was resolved by re-checking the real production bootstrap path.
+
+### Post-release 0.6.0 documentation maintenance
+
+The README should prominently state the **Kill Switch scope**:
+
+- tunnel loss or GUI failure while the system/kernel remains running can stay fail-closed because the active `nftables` rules remain in kernel state;
+- a full reboot, kernel crash, or power loss clears that runtime firewall state;
+- PIA Bazzite is therefore **not** an early-boot firewall, and Kill Switch protection is not active again after boot until PIA Bazzite runs and activates it.
+
+This clarification does not justify a 0.6.1 by itself. Accumulate real bugs/hardening changes and create a maintenance release when there is enough reason.
+
+---
+
+## 3. Source of truth
+
+For future development:
+
+- The **current GitHub `main` branch / a fresh archive from the actual current local checkout** is the source of truth for exact current code.
+- The **`v0.6.0` tag at `4df051f`** is the source of truth for the runtime code that shipped as 0.6.0.
+- `main` may legitimately move beyond the release tag for documentation-only or later maintenance commits. Always inspect the actual current checkout before changing code.
+- This HANDOFF explains intent, architecture, verified behavior and history. It is **not** a substitute for inspecting the current source tree.
+- Do not reconstruct a future patch from old A9/A10/A11/A12/A13/A14/stage archives or fragments from previous chats. Those are historical snapshots and may predate later security, recovery, packaging or UI fixes.
+- Before a substantial code change, request/inspect the complete current source if it is not already available in the conversation.
+
+This mirrors the working rule proven useful in TrainerBridge: handoff for intent/history, current source for exact implementation.
+
+---
+
+## 4. Development working agreement
+
+The project owner is **adventureFAN**. PIA Bazzite was developed collaboratively with ChatGPT by OpenAI. Maintained public credit wording is:
+
+`Project direction, feature design, testing, and release decisions: **adventureFAN**`
+
+`Most implementation, debugging, and technical documentation: developed collaboratively with **ChatGPT**`
+
+AppStream's formal developer field remains `adventureFAN`.
+
+For future work:
+
+- **Do not patch first and inspect later.** Reconcile the current complete source tree with this HANDOFF before proposing substantial code changes.
+- Prefer **one targeted regression test too many rather than one too few**, especially around privilege boundaries, NetworkManager, routing, firewall release, crash recovery and packaging.
+- Do not make speculative changes to working security-sensitive code merely because another design looks theoretically cleaner.
+- Fix the smallest proven problem. Avoid broad refactors immediately before a security-sensitive maintenance release.
+- Treat the project owner as a development beginner for hands-on instructions: give copy/paste-ready commands, explicit paths, explain what each step is doing, and state the expected PASS/output or visible behavior. Do not assume Git, venv, build, Polkit or packaging commands are remembered.
+- Prefer complete replacement files or a small patch/archive over asking the user to manually edit Python.
+- After changing security-sensitive production logic, rerun the appropriate real-host test; a container/unit test is not sufficient authority for a real networking/firewall behavior change.
+- Preserve privacy in public source and release artifacts: no local usernames, personal home paths, credentials, PIA tokens, WireGuard private keys, or accidental development leftovers.
+- Public GitHub documentation is maintained in **English**. The application itself remains localized in **English and German**.
+- Maintain this HANDOFF after meaningful architecture changes, security decisions, verified host-test results, release-state changes and roadmap decisions. Do not wait until a chat is nearly full.
+- After 0.6.0, changes should be driven by real bugs, security/hardening findings or clearly useful user requests. Do not invent features merely to justify a new version number.
+
+---
+
+## 5. Security architecture and invariants
+
+These are release-critical and must not be casually weakened.
+
+1. The optional Session Kill Switch is **fail-closed while the current system session is running**.
+2. The full Kill Switch firewall must be established and independently verified **before** a protected VPN is allowed to start.
+3. Firewall release is allowed only after PIA VPN absence and the expected safe state have been independently verified.
 4. `unknown` NetworkManager state is never treated as `disconnected`.
-5. Protected reconnect and protected server switch must never create direct
-   fallback traffic.
-6. GUI stays unprivileged; privileged nftables work is confined to the fixed
-   helper boundary.
-7. AppImage helper install/update must install exactly the verified payload;
-   packaged mode must never downgrade to source-tree mode.
-8. Crash-recovery records are hints, not authority. Adoption requires matching
-   live helper, NetworkManager, route, firewall, and recovery state.
-9. Emergency Reset stops the VPN before removing the fixed firewall table and
-   cleans an untrusted recovery path only after verified host release.
-10. Secrets (passwords, PIA tokens, WireGuard private keys) must not enter logs
-    or release artifacts.
+5. Protected reconnect and protected server switch must never create a direct-network fallback window.
+6. The GUI stays unprivileged. Privileged `nftables` work is confined to the fixed installed helper boundary.
+7. Packaged helper installation/update must install exactly the verified AppImage payload. Packaged mode must never silently downgrade to source-tree helper mode.
+8. The installed helper launcher/bootstrap verifies the fixed root-owned installation and checksum manifest **before importing the installed helper package**. Preserve this pre-import bootstrap boundary.
+9. Crash-recovery records are hints, not authority. Adoption requires live helper, NetworkManager, route, firewall and recovery state to agree.
+10. The small normal-mode IPv6 guard and the full Session Kill Switch are separate tables and must not be confused or accidentally coexist as competing ownership states.
+11. The integrated reset is VPN-first: stop/verify the VPN, keep the Kill Switch active during that verification, remove only PIA Bazzite's fixed Kill Switch table, verify it absent, then clean recovery state.
+12. If any reset/release verification is ambiguous or fails, remain fail-closed and do not claim normal networking has been safely restored.
+13. Secrets - passwords, PIA tokens, WireGuard private keys - must never enter Live Log, test reports intended for sharing, source archives or release artifacts.
+14. The Session Kill Switch is **not boot-persistent**. A full reboot/kernel crash/power loss clears runtime `nftables` state; do not claim otherwise.
 
-## Development workflow preferences
+### Installed-helper checksum boundary
 
-Keep these non-sensitive working conventions across future sessions:
+A post-release review noted that `installed_entry.py` itself has package imports before its local `verify_installation()` call. This is not the production entry boundary. The fixed installed launcher `helper/pia-bazzite-kill-switch-helper-installed` uses only the standard library, verifies the root-owned installation and checksum manifest first, and only then imports `pia_bazzite_kill_switch_helper.installed_entry`. The regression test `tests/polkit/test_installed_helper.py::InstalledFilesStaticTests::test_launcher_verifies_before_importing_installed_package` exists specifically to preserve this ordering.
 
-- Prefer **one test too many rather than one too few**, especially around
-  privilege boundaries, networking, recovery, AppImage packaging and release
-  gates. Do not skip a host retest after changing security-sensitive production
-  logic.
-- Before preparing code updates, work from the **current project state/archive**
-  instead of reconstructing or mixing old versions.
-- Give **copy/paste-ready commands**, explicit paths and the exact PASS/output to
-  expect; do not assume development-tool knowledge.
-- Put generated update/archive artifacts in the user's **Downloads directory**
-  (use `$HOME/Downloads` in commands; never hard-code a personal username into
-  public project files).
-- Treat a **full code audit before a major/final release** as part of the release
-  process. Classify findings by release risk and avoid broad cosmetic refactors
-  immediately before a security-sensitive release.
-- Preserve privacy in public sources and release artifacts: no personal home
-  paths, local usernames, credentials, tokens, private keys or other identifying
-  development leftovers.
-- Maintain this handoff **continuously after meaningful substages, security
-  decisions, host-test results and roadmap changes**; do not wait for a chat to
-  be near its context limit.
+---
 
-## User-visible Kill Switch states
+## 6. User-visible connection/protection states
 
-- Neutral gray: VPN intentionally off; Kill Switch off / ready.
-- Neutral gray: VPN intentionally off; Kill Switch enabled for next connection.
-- Blue: VPN connected without Kill Switch.
-- Green: VPN connected + verified Kill Switch protection.
-- Orange: VPN lost; verified Kill Switch is blocking safely.
-- Red: protection expected but cannot be guaranteed.
+The color semantics are deliberate:
 
-The manual read-only status action is named **“Schutzstatus neu prüfen”** in the
-German UI.
+- **Neutral gray:** VPN intentionally disconnected. Kill Switch may be off or merely armed for the next connection.
+- **Blue:** VPN connected without the full Session Kill Switch. The narrow IPv6-only guard is active so native IPv6 cannot bypass the PIA IPv4 WireGuard path.
+- **Green:** VPN connected and the full Session Kill Switch is active and verified.
+- **Orange:** VPN unavailable/down while the verified Session Kill Switch remains active and blocks normal networking safely.
+- **Red:** protection is expected but cannot currently be guaranteed/verified.
 
-## Stage 8 status and next steps
+Do not redefine Green as an internet-reachability heartbeat. During complete physical-network loss, NetworkManager may still report the WireGuard profile administratively active while no handshake can occur. If the full Kill Switch remains verified active, fail-closed traffic blocking is the security property that matters. Do not add a fragile HTTP/ping heartbeat merely to make Green mean “the public Internet answered this second.”
 
-### 8C.1 — full code audit
+The German manual read-only status action is **`Schutzstatus neu prüfen`**.
 
-Completed. Main release blockers identified: packaged-helper privilege-handoff
-TOCTOU/downgrade risk, NetworkManager query failures being collapsed to
-“disconnected”, and stale SECURITY documentation. Important hardening also
-includes safe WireGuard-config creation, stricter PIA-response validation,
-single-instance startup serialization, public-IP lookup privacy, CI/release
-coverage and deterministic packaging hygiene.
+---
 
-### 8C.2 — current hardening
+## 7. Normal VPN versus Session Kill Switch
 
-The first hardening slice addresses the release-sensitive audit findings without
-a broad refactor:
+### Normal VPN, Kill Switch OFF
 
-- packaged helper privilege handoff now anchors authorization to the verified
-  AppImage manifest digest, copies opened-and-hashed bytes into a root-owned
-  private `/run` tree, and forbids packaged-to-source downgrade;
-- NetworkManager query failure is `unknown`, never `disconnected`;
-- WireGuard config output is created private (`0600`) from the first open and
-  refuses unsafe targets;
-- PIA values that form network/WireGuard configuration are validated before use;
-- stale single-instance socket cleanup is serialized with a lock;
-- automatic public-IP lookup while verified disconnected is removed and
-  documented;
-- stale Kill Switch security documentation is corrected;
-- known personal development paths/legacy organization markers are removed from
-  the public source tree and guarded by a release regression test.
+PIA's WireGuard parameters used by this client provide an IPv4 tunnel/default route but no routed IPv6 `AllowedIPs` path. PIA Bazzite therefore does **not** invent an unsupported IPv6 tunnel route.
 
-Avoid a large `gui.py` refactor before 0.6.0. The unprivileged Stage-8C.2
-self-test **passed on Bazzite**, and the real AppImage helper host gate was rerun
-after the privilege-handoff changes and **passed again**: missing helper install,
-exact-helper reuse and explicit outdated-helper update all succeeded.
-The second 8C.2 packaging-hardening slice is implemented and awaits its final
-Bazzite packaging-host proof: CI and release jobs use one authoritative
-unprivileged gate; local release-mode Podman builds require a completely clean
-Git tree and export only `HEAD`; the GitHub release job resets/cleans the tree
-after tests before building; direct release builds reject dirty/mismatched source
-identity; `appimagetool` 1.9.1 is SHA-256 pinned before execution; build
-provenance is embedded in `BUILD_INFO.txt`; and the AppImage build generates an
-inventory plus available license/notice files for the installed Python runtime
-dependency graph, including PySide6/Qt material supplied by the wheel. Release
-notes no longer expose internal Stage-8 wording. Run
-`tools/release-stage8c2-self-test.sh` and then
-`tools/release-stage8c2-packaging-host-test.sh`; only after both pass should
-8C.3 begin.
+Instead:
 
-### 8C.3 — release-candidate regression
+1. the dedicated helper-owned table `pia_bazzite_ipv6_guard` is enabled and verified before the normal VPN is reported usable;
+2. IPv4 uses the PIA WireGuard interface `piabazzite`;
+3. native public IPv6 is blocked while the VPN is active;
+4. on a verified intentional VPN disconnect, the IPv6 guard is removed and the machine's normal IPv6 connectivity returns.
 
-Build the RC from the hardened tree and exercise normal VPN mode plus the
-essential Kill Switch paths (connect/disconnect, protected switch/reconnect,
-crash/takeover subset, tray/UI/log/language/theme smoke checks).
+This narrow guard is **not** a full Kill Switch. If the ordinary VPN disappears unexpectedly with Kill Switch OFF, IPv4 is allowed to return normally after the appropriate state handling; the feature's job is only to prevent simultaneous native IPv6 bypass while the VPN is active.
 
-### 8D — final release gate
+### Session Kill Switch ON
 
-Freeze the release commit, build the exact AppImage, verify checksum and
-metadata/notices, run the shortened final host gate, then tag the exact tested
-commit as `v0.6.0` and prepare the GitHub release.
+The full helper-owned `pia_bazzite_killswitch` table is authoritative for fail-closed protection. It allows only the required local/DHCP/link-local traffic, the exact current PIA WireGuard endpoint on the physical interface, and the PIA tunnel path; normal traffic outside the tunnel is rejected.
 
-## Planned post-0.6.0 roadmap
+The small IPv6 guard must not be treated as the full Kill Switch. The two mechanisms have separate state/verification contracts.
 
-The plan is intentionally flexible; no feature is promised until implemented
-and tested.
+### Physical-network loss
 
-- **0.7.x candidates:** server favorites, Auto-Connect, suspend/resume handling,
-  and robust network-change handling.
-- **0.8.x candidates:** trusted networks and an optional, carefully tested local
-  LAN-access exception for the Kill Switch.
+When Wi-Fi/underlay disappears, WireGuard can remain administratively `connected` in NetworkManager even though no new handshake is possible. Real testing showed the Kill Switch remained active and both IPv4 and IPv6 were unreachable until the physical network returned. Do not treat this as a fail-open merely because the GUI remained Green.
+
+### KDE/Bazzite “Limited connectivity”
+
+While the full Kill Switch is active, KDE/NetworkManager may report **Limited connectivity** because NetworkManager's own direct connectivity probe cannot bypass the VPN/firewall through the physical interface. This does not by itself mean the PIA tunnel is down. After intentional release, the desktop indicator may remain limited briefly until NetworkManager performs its next check.
+
+---
+
+## 8. Recovery and reset behavior
+
+### Unexpected VPN loss with Kill Switch active
+
+The intended order is:
+
+1. detect VPN loss;
+2. retain/verify the existing firewall lock;
+3. update crash-recovery state to protected-blocking;
+4. verify previously reachable normal IPv4/IPv6/direct-DNS paths are blocked;
+5. update endpoint exceptions while the lock remains active;
+6. verify the exact protected route;
+7. rebuild the NetworkManager WireGuard profile under protection;
+8. jointly verify VPN + still-active firewall;
+9. save verified crash state and return to Green.
+
+### GUI crash while protected
+
+Because the firewall lives in kernel state, killing only the GUI must not remove protection. On restart the new GUI may briefly show Red/unverified before Polkit authorization because it must not claim protection until the privileged state is checked. After exact verification it can adopt either:
+
+- connected + firewall -> Green; or
+- VPN down + exact firewall -> Orange / Safely blocked.
+
+Initial server-list network refresh must remain deferred while a blocking startup recovery is awaiting privileged reconciliation. This prevents an offline modal network error from racing/obscuring Polkit.
+
+### Reset Kill Switch Protection
+
+The user-facing product action is **`Reset Kill Switch Protection…`** / **`Kill-Switch-Schutz zurücksetzen…`**. Internal function/module names may still use `emergency_reset`.
+
+The action is deliberately contextual: hidden during ordinary Gray/Blue/healthy Green states and surfaced only when a known PIA Bazzite Kill Switch firewall makes the recovery action relevant, including safely blocked or certain protection-error states.
+
+After a successful reset, normal networking is restored **without VPN protection** and the user's real public IP may be visible. Never promise continued VPN/IP protection after the reset has deliberately released the firewall.
+
+A genuine startup-recovery failure should offer a direct retry plus the same explicit reset path; reset must never run automatically.
+
+---
+
+## 9. Startup, authorization and single-instance rules
+
+- A remembered Kill Switch preference while the VPN is cleanly disconnected is only an **armed preference**, not proof that a firewall is active.
+- Normal disconnected startup with Kill Switch remembered ON must not require Polkit and must not show an unnecessary Red state.
+- Enabling Kill Switch from OFF may request Polkit so the restricted privileged boundary can be checked/prepared.
+- A protected connect can require authorization. If the user cancels Polkit before privileged mutation, the VPN must not start and no half-created firewall may remain.
+- Deliberate Polkit cancellation in these pre-mutation paths is a neutral user cancellation/authorization-not-granted outcome, not a catastrophic application error.
+- Real crash-recovery reconciliation with a surviving privileged firewall legitimately requires authorization before the new GUI can verify/adopt it.
+- PIA Bazzite is single-instance. A second launch must not create a second independent VPN/firewall controller or duplicate tray session.
+
+---
+
+## 10. Persistent paths and installed component
+
+Typical development checkout:
+
+```text
+~/PIA-Bazzite
+```
+
+XDG user data used by the application:
+
+```text
+~/.config/pia-bazzite/settings.ini
+~/.cache/pia-bazzite/regions.json
+~/.local/state/pia-bazzite/
+~/.local/state/pia-bazzite/kill-switch-crash-recovery-v1.json
+```
+
+Credentials are stored through the Linux Secret Service/keyring rather than plain-text project files.
+
+The packaged privileged component is installed under the fixed root-owned path:
+
+```text
+/usr/local/libexec/pia-bazzite/
+```
+
+Production firewall tables:
+
+```text
+inet pia_bazzite_ipv6_guard
+inet pia_bazzite_killswitch
+```
+
+Do not generalize helper operations to arbitrary user-supplied paths/table names. The narrow fixed boundary is intentional.
+
+---
+
+## 11. Important source files
+
+Top-level/runtime:
+
+- `main.py` - application entry point.
+- `pia_bazzite/gui.py` - main Qt GUI/controller, tray integration and user workflows.
+- `pia_bazzite/settings.py` - XDG paths and persistent settings.
+- `pia_bazzite/i18n.py` + `pia_bazzite/resources/i18n/*.json` - DE/EN localization; keep PySide6 imports lazy enough for non-GUI security tests.
+- `pia_bazzite/credentials.py` - Secret Service/keyring credential storage.
+- `pia_bazzite/pia_api.py` - PIA API/server-list interactions and validated response handling.
+- `pia_bazzite/network_manager.py` - fixed PIA NetworkManager/WireGuard profile handling and verified connection state.
+- `pia_bazzite/host_open.py` - host desktop opening from packaged environment.
+- `pia_bazzite/single_instance.py` - one-controller startup serialization.
+
+Protection/orchestration:
+
+- `pia_bazzite/kill_switch_client.py` - restricted helper client.
+- `pia_bazzite/kill_switch_session.py` - authenticated helper session/broker lifecycle.
+- `pia_bazzite/kill_switch_connection.py` - protected connect/switch/disconnect ordering.
+- `pia_bazzite/kill_switch_recovery.py` - verified recovery decisions and adoption.
+- `pia_bazzite/kill_switch_crash_state.py` - persistent recovery journal/markers; hints, not authority.
+- `pia_bazzite/kill_switch_runtime.py` / `kill_switch_state.py` - runtime state model.
+- `pia_bazzite/network_paths.py` / `network_probes.py` - physical/blocked-path verification.
+- `pia_bazzite/ipv6_guard_lifecycle.py` - normal-VPN IPv6-only guard lifecycle.
+- `pia_bazzite/emergency_reset.py` - unprivileged VPN-first reset coordinator.
+
+Privileged helper:
+
+- `helper/pia-bazzite-kill-switch-helper-installed` - production pre-import verification bootstrap.
+- `helper/pia-bazzite-kill-switch-session-installed` - installed session broker entry.
+- `helper/pia_bazzite_kill_switch_helper/core.py` - fixed privileged firewall logic.
+- `helper/pia_bazzite_kill_switch_helper/protocol.py` - restricted protocol.
+- `helper/pia_bazzite_kill_switch_helper/runner.py`, `cli.py`, `session_entry.py`, `installed_entry.py` - fixed helper/session execution path.
+
+Packaging/release:
+
+- `packaging/build-appimage-podman.sh` - preferred isolated Bazzite/Fedora build path.
+- `packaging/build-appimage.sh` - AppImage build logic.
+- `packaging/build-helper-bundle.py` - exact helper payload/manifest construction.
+- `packaging/collect_third_party_licenses.py` - bundled dependency notice/license collection.
+- `packaging/appimage/PIA-Bazzite.spec` - PyInstaller specification.
+- `.github/workflows/ci.yml` - public CI gate.
+- `.github/workflows/release.yml` - tag-driven release build/publish workflow.
+- `tools/release-unprivileged-gate.sh` - common release gate.
+- `tools/release-stage8c2-self-test.sh` - authoritative accumulated unprivileged regression gate for the 0.6.0 architecture.
+- `tools/release-stage8c2-packaging-host-test.sh` - real packaging/release-hygiene host gate.
+
+Documentation/evidence:
+
+- `README.md`
+- `SECURITY.md`
+- `TESTING.md`
+- `CHANGELOG.md`
+- `RELEASE_NOTES_0.6.0.md`
+- `THIRD_PARTY_NOTICES.md`
+- `docs/HANDOFF.md`
+- `docs/kill-switch/` - detailed staged Kill Switch design/test history.
+- `docs/release/` - release packaging/helper handoff material.
+
+---
+
+## 12. Deliberate UX and privacy decisions
+
+Do not casually revert these:
+
+- Tray color semantics are Gray / Blue / Green / Orange / Red as documented above.
+- Closing the window with tray enabled hides to tray; it does not silently tear down VPN/firewall state.
+- With tray disabled, closing the window follows the configured real exit policy. Leaving the VPN connected is refused when doing so would abandon an active Kill Switch protection state.
+- The Session Kill Switch preference remains enabled after a successful reset; the next protected connection should use it again.
+- Public IP/country lookup uses `api.country.is`. While verified disconnected, it is **not queried automatically**; the user can explicitly request it. Automatic lookups are limited to verified VPN-connected states.
+- Offline startup may fail to load the PIA server list. In 0.6.0 there is deliberately no new automatic network-state watcher solely to reload it when Wi-Fi returns; **Refresh server list** is the accepted recovery path.
+- Live Log uses compact timestamps and meaningful `OK`, `INFO`, `WARNING`, `ERROR` events; do not add noisy per-poll spam. Secrets must be redacted and public IP display/logging uses masking where designed.
+- Long explanatory tooltips should be deliberately wrapped rather than rendered as monitor-wide single lines.
+- Public GitHub docs are English-only; runtime UI is DE/EN.
+- Do not claim PIA as a service universally lacks IPv6. The precise statement is that the WireGuard parameters currently provisioned to **this client** provide the IPv4 route but no tunneled IPv6 `AllowedIPs` path, so PIA Bazzite blocks native IPv6 while connected.
+
+---
+
+## 13. Known limitations / non-bugs
+
+These are important user expectations, not hidden defects:
+
+- The Session Kill Switch is **not persistent across reboot/kernel crash/power loss**.
+- PIA Bazzite is not an early-boot firewall.
+- KDE/NetworkManager may show `Limited connectivity` while the full Kill Switch intentionally blocks direct connectivity probes.
+- Complete physical-network loss can leave the WireGuard profile administratively active/Green even while no public traffic is possible; the verified firewall still blocks fallback.
+- Normal VPN mode blocks native IPv6 rather than tunneling it because the PIA parameters used by this client do not provide a tunneled IPv6 route.
+- 0.6.0 does not provide split tunneling, port forwarding, trusted-network rules or automatic connection at login.
+- Support is intentionally focused on Bazzite; do not silently broaden support guarantees to arbitrary distributions without testing.
+
+---
+
+## 14. Release smoke/regression checklist
+
+Before a future release, choose scope based on risk. A docs-only change does not require rebuilding the VPN stack. A networking/helper/firewall change does.
+
+### Minimum release sanity
+
+- clean source tree / expected version;
+- `bash tools/release-stage8c2-self-test.sh` green;
+- packaging host gate green when release/package behavior changed;
+- AppImage starts normally and About/version is correct;
+- DE/EN and System/Light/Dark basic UI smoke;
+- single-instance behavior;
+- normal disconnected startup with remembered Kill Switch does not request unnecessary Polkit;
+- one normal connect/disconnect cycle;
+- public IP shows PIA while connected;
+- normal VPN has the IPv6-only guard and no native IPv6 leak;
+- intentional disconnect removes the guard and restores normal IPv4/IPv6.
+
+### Critical Session Kill Switch regression subset
+
+For any change touching NetworkManager, helper, firewall, Polkit, recovery or crash-state logic, at minimum re-check:
+
+1. protected connect: firewall verified before VPN start -> Green;
+2. protected intentional disconnect: VPN verified down before firewall release -> normal networking restored;
+3. forced VPN loss: Orange/fail-closed -> protected reconnect -> Green;
+4. protected server switch: old tunnel stops under lock, endpoint exception retargets under lock, new tunnel verifies -> Green;
+5. GUI crash while protected connected: firewall/VPN survive -> restart exact adoption -> Green;
+6. GUI crash while protected-blocking: restart exact adoption -> Orange -> protected reconnect -> Green;
+7. integrated Reset Kill Switch Protection from a deliberately blocked/error state: VPN down verified -> fixed table removed/verified -> normal IPv4/IPv6 restored;
+8. Polkit cancellation before privileged mutation leaves no half-created VPN/firewall state;
+9. no secrets in logs or generated release evidence.
+
+### Previously completed 0.6.0 real-host RC matrix
+
+The final 0.6.0 cycle also verified first-run helper installation/update UX, normal server switching, tray behavior, exit policies, settings persistence, tray-disabled shutdown, suspend/resume, physical Wi-Fi loss/recovery, external NetworkManager VPN disconnect/recovery, offline start/manual server-list refresh, links/About/log actions and final normal protected use. Do not repeat every adversarial test for a tiny unrelated patch, but do not skip the changed area plus critical safety paths.
+
+---
+
+## 15. Release / GitHub procedure
+
+For 0.6.0 the successful publication flow was:
+
+1. freeze the exact tested source;
+2. commit it on `main` and require a clean working tree;
+3. push `main`;
+4. wait for CI to be green on that exact commit;
+5. create annotated tag `v0.6.0` on the same commit;
+6. verify tag commit equals tested `main` commit;
+7. push the tag;
+8. let the pinned GitHub release workflow build from that exact tag commit;
+9. verify the release contains the versioned AppImage and `.sha256` sidecar;
+10. perform a final checksum/version smoke check on the published asset.
+
+For future releases, preserve the same principle: **tag exactly what was tested; build the public artifact from exactly what was tagged.** Never retag a different commit under the same public version.
+
+The release workflow has `contents: write`, so third-party GitHub Actions used in CI/release were pinned to exact reviewed commit SHAs during the 0.6.0 freeze. Do not casually revert those to floating major tags.
+
+GitHub-provided source archives should come from the tagged commit; do not create an unrelated hand-packed source archive as the public source of truth unless there is a specific reason.
+
+---
+
+## 16. Planned future development stance
+
+The original 0.6.0 goal is complete. There is no requirement to create 0.6.1 or 0.7.0 merely because time has passed.
+
+Preferred approach:
+
+1. use PIA Bazzite normally;
+2. collect real annoyances/bugs and security/hardening findings;
+3. accept useful GitHub reports;
+4. group meaningful maintenance work into 0.6.1 when justified;
+5. reserve larger behavior/features for later minor versions and give security-sensitive features dedicated design/testing.
+
+Current candidate roadmap, not promises:
+
+- **0.6.1:** only if real bugs/hardening/maintenance items accumulate; do not release solely for the reboot-scope README clarification.
+- **0.7.x candidates:** server favorites, Auto-Connect, improved network-change handling, and an Options dialog when enough real settings exist to justify it.
+- **0.8.x candidates:** trusted networks and an optional, carefully tested local-LAN access exception for the Kill Switch.
 - **0.9.x candidate:** PIA port forwarding on supported regions.
-- **Later / high risk:** per-app split tunneling. Treat this as a security/routing
-  project comparable in complexity to the Kill Switch, not a small feature.
-- **1.0.0:** reserve for a mature, stable overall product rather than using the
-  number as a deadline for arbitrary feature accumulation.
+- **Later / high risk:** per-app split tunneling. Treat it as a routing/security project comparable in complexity to the Kill Switch, not a small checkbox.
+- **Potential architectural maintenance:** gradually split the large GUI/controller and introduce/style-gate tools such as Ruff/optional type checking, but never mix a broad refactor into an urgent security patch.
+- **Possible larger security feature:** boot-persistent/early-boot protection would be a separate major design effort involving systemd, lockout recovery, update/uninstall safety and boot networking. It is not a 0.6.1 patch.
+- **1.0.0:** reserve for a mature overall product rather than using the number as a deadline.
 
-After 0.6.0, consider splitting the very large GUI/controller module gradually,
-and introduce/style-gate tools such as Ruff and optional type checking without
-mixing a broad refactor into a security release.
+---
+
+## 17. Starting a new development chat
+
+Best workflow:
+
+### Step 1 - archive the actual current checkout
+
+From the parent directory:
+
+```bash
+cd "$HOME"
+
+tar \
+  --exclude='PIA-Bazzite/.git' \
+  --exclude='PIA-Bazzite/.venv' \
+  --exclude='PIA-Bazzite/build' \
+  --exclude='PIA-Bazzite/dist' \
+  --exclude='PIA-Bazzite/__pycache__' \
+  --exclude='PIA-Bazzite/**/__pycache__' \
+  -czf "$HOME/PIA-Bazzite-current.tar.gz" \
+  PIA-Bazzite
+```
+
+If the checkout contains additional generated packaging/staging directories in a future version, exclude those too. Do **not** exclude maintained source tests/docs merely to make the archive smaller.
+
+### Step 2 - upload two files
+
+Upload:
+
+1. `PIA-Bazzite-current.tar.gz`
+2. this `docs/HANDOFF.md`
+
+### Step 3 - tell the new ChatGPT instance
+
+For example:
+
+```text
+We are continuing development of PIA Bazzite.
+Please read docs/HANDOFF.md first, then inspect the complete current source archive before proposing code changes.
+The source tree is authoritative for exact code; the HANDOFF explains architecture, verified behavior and historical traps.
+```
+
+### Step 4 - do not patch immediately
+
+The new assistant should reconcile the current tree with this HANDOFF first. If the HANDOFF claims something that the source no longer implements, inspect Git/history/current tests before assuming either side is correct.
+
+---
+
+## 18. Quick “do not regress” checklist
+
+Before declaring a future change finished, ask:
+
+- Did I inspect the current complete source before changing it?
+- Does normal disconnected startup with Kill Switch remembered ON remain Polkit-free?
+- With Kill Switch OFF, is the exact IPv6-only guard active before/while the VPN is connected and removed only after verified intentional disconnect?
+- Can native IPv6 bypass the normal VPN? It must not.
+- With Kill Switch ON, is the full firewall active and verified **before** NetworkManager starts the VPN?
+- Are `pia_bazzite_ipv6_guard` and `pia_bazzite_killswitch` still separate, correctly owned states?
+- Is `unknown` still distinct from `disconnected`?
+- Does intentional protected disconnect verify VPN-down before releasing the firewall?
+- Does forced tunnel loss remain fail-closed and recover under the existing lock?
+- Does protected server switching retarget endpoint exceptions while the lock remains active?
+- Does GUI SIGKILL leave kernel protection intact and allow exact restart adoption?
+- Can a blocked crash state restart directly into Orange without an unrelated server-list modal racing Polkit?
+- Are crash-recovery records still treated only as hints and verified against live state?
+- Does Reset Kill Switch Protection remain VPN-first, fixed-table-only, verified, explicit and never automatic?
+- Does reset copy still warn that normal networking afterward is outside VPN protection and the real public IP may be visible?
+- Does the installed root helper bootstrap still verify ownership/modes/manifest/checksums before importing installed helper package code?
+- Can a user-controlled path, table name or arbitrary command cross the privileged helper boundary? It should not.
+- Does Polkit cancellation before mutation leave VPN/firewall unchanged and present a neutral cancellation result?
+- Does single-instance protection prevent two competing GUI/controllers?
+- Do Live Log/public diagnostics remain free of credentials, PIA tokens and WireGuard private keys?
+- Is disconnected public-IP lookup still manual-only?
+- Are public docs still honest about reboot scope, Limited connectivity and IPv6 behavior?
+- Are public GitHub docs still English while runtime localization remains DE/EN?
+- If packaging/release changed, are helper payload provenance, licenses/notices, Action pins, exact commit/tag identity and AppImage checksum still verified?
+- Did I run the changed-area regression plus the critical safety subset appropriate to the change?
+
+If these answers are yes, the change is much less likely to undo one of the hard-won 0.6.0 safety properties.
+
+---
+
+## 19. Historical 0.6.0 development record
+
+The sections below preserve detailed Stage-8 decisions and real-host findings. They are **historical evidence**. Any old sentence saying “next step”, “awaits”, “current candidate” or similar describes that moment in development and must not override the current release state at the top of this HANDOFF.
+
+### Earlier Stage-8 summary
+
+- **8C.1 full code audit:** found and fixed release-sensitive issues including packaged-helper privilege-handoff TOCTOU/downgrade risk, NetworkManager query failures being collapsed to disconnected, stale security documentation, WireGuard-config safety, PIA response validation, single-instance serialization, public-IP privacy, CI/release coverage and packaging hygiene.
+- **8C.2 hardening:** fixed helper payload anchoring/staging, unknown NetworkManager state, private WireGuard config creation, validated PIA network values, single-instance stale-socket serialization, disconnected public-IP behavior, source privacy and deterministic packaging/provenance/license handling.
+- **8C.3 real RC:** exercised normal VPN, IPv6 containment, full Session Kill Switch, protected recovery/switching, crash adoption, integrated reset, tray/exit/settings/suspend/offline and UI behavior on real Bazzite.
+- **8D freeze:** finalized release date/metadata, pinned external GitHub Actions, committed exact release tree, required clean CI, and tagged the exact release commit as `v0.6.0`.
 
 ### Stage 8C.2 packaging license-material correction
 
@@ -1061,3 +1412,10 @@ Release policy after 0.6.0 remains conservative: do not create 0.6.1 solely for
 this documentation clarification. Accumulate real bug fixes/hardening changes and
 ship a maintenance release when there is enough reason to do so.
 
+---
+
+## 20. HANDOFF maintenance rule
+
+Update this file whenever a future release changes architecture, support status, privileged boundaries, firewall/recovery behavior, user-visible safety semantics, verified host behavior, release procedure, or a design decision that a later developer/ChatGPT instance would otherwise have to rediscover.
+
+Keep historical evidence when it explains why a current invariant exists, but always update the **Current release state**, **Source of truth**, **Known limitations**, **Future development stance**, and **Quick do-not-regress checklist** so old stage language cannot be mistaken for the present state.
