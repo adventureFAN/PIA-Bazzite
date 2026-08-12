@@ -3,7 +3,7 @@
 **Purpose:** Continuity document for future ChatGPT conversations and later PIA Bazzite development.
 **Last updated:** 2026-08-12
 **Current public stable release:** **PIA Bazzite 0.6.0**
-**Current development baseline:** **0.7.0 development — Stage 1 verified; Stage 2A server-favorites core verified; Stage 2B main-window favorites UI verified; Stage 2C root-level tray Favorites submenu verified**
+**Current development baseline:** **0.7.0 development — Stage 1 verified; Stage 2 server-favorites feature fully integrated and verified (2A core, 2B main window, 2C tray, 2D integrated freeze)**
 **Stable release tag:** `v0.6.0`
 **Stable release commit:** `4df051f` (`feat: prepare PIA Bazzite 0.6.0 release`)
 **Repository:** https://github.com/adventureFAN/PIA-Bazzite
@@ -462,9 +462,16 @@ Current candidate roadmap, not promises:
 - `_toggle_region_favorite()` rebuilds the tray after every successful add/remove. Therefore adding the first favorite creates the submenu, adding/removing further favorites updates its contents, and removing the final favorite removes the submenu on the next tray-menu opening without restarting PIA Bazzite or refreshing the server catalog.
 - Focused Stage 2C regression coverage lives in `tests/ui/test_server_favorites_stage2c.py`; `tools/0.7-stage2c-tray-favorites-self-test.sh` runs Stage 2A, Stage 2B and Stage 2C checks plus the existing release self-test without touching the real tray, network, helper, firewall or NetworkManager. Real Bazzite verification is complete: the Favorites submenu appears immediately after adding the first favorite, updates on the fly as favorites are added/removed, and disappears completely after removing the final favorite; its top-level entry intentionally has no icon while individual favorites use the yellow/gold star; selecting a favorite while disconnected uses the normal connect path; selecting another favorite while connected keeps the existing server-switch confirmation and successfully switches through the established connection/Kill-Switch path. Treat Stage 2C as verified.
 
+**Stage 2D verified — integrated server-favorites freeze (2026-08-12):**
+
+- The complete favorites stack was rechecked together after the separate 2A/2B/2C commits. All three focused self-test gates passed in sequence with the inherited release self-test still green.
+- Real Bazzite integrated verification passed with persisted favorites after restart; main-window ordering `favorites → Fastest → remaining regions by ping`; popup opening at the top; live add/remove synchronization between the main window and tray; search behavior; the 10-favorite cap; direct tray connect while disconnected; confirmed tray server switching while already connected; and the existing Kill-Switch-protected server-switch path.
+- Previously completed focused proofs remain authoritative for the catalog-missing edge case: an unavailable favorite stays visible but disabled/non-connectable, its star remains removable, removing it deletes the retained row immediately, and a missing non-favorite is never synthesized.
+- Stage 2 introduces no parallel VPN connection path: main-window row selection and tray favorite actions continue to reuse the existing connection/server-switch machinery. The favorite store remains identity/display-only and never supplies stale endpoint data.
+- Treat the complete **Server Favorites** feature as integrated and frozen for 0.7 development. Future changes to favorites must preserve the Stage 2A/2B/2C invariants and rerun the corresponding focused gates plus a targeted real UI/tray check.
 
 - **0.6.1:** only if real bugs/hardening/maintenance items accumulate; do not release solely for the reboot-scope README clarification.
-- **0.7.x candidates:** server favorites, Auto-Connect, improved network-change handling, and an Options dialog when enough real settings exist to justify it.
+- **0.7.x next candidates:** Auto-Connect, improved network-change handling, the public-IP/geolocation provider hardening discovered during Stage 2 testing, and an Options dialog when enough real settings exist to justify it. Server Favorites are complete and verified.
 - **0.8.x candidates:** trusted networks and an optional, carefully tested local-LAN access exception for the Kill Switch.
 - **0.9.x candidate:** PIA port forwarding on supported regions.
 - **Later / high risk:** per-app split tunneling. Treat it as a routing/security project comparable in complexity to the Kill Switch, not a small checkbox.
