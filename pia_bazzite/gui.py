@@ -118,6 +118,7 @@ from .ipv6_guard_lifecycle import (
 from .models import PublicNetworkInfo, Region, SystemCheck
 from .network_paths import discover_physical_interface
 from .network_probes import NetworkProbeBaseline, NetworkProbeError
+from .options_dialog import OptionsDialog
 from .pia_api import (
     create_wireguard_config,
     fetch_public_network_info,
@@ -859,6 +860,9 @@ class MainWindow(QMainWindow):
             lambda: self.edit_credentials(first_run=False)
         )
 
+        self.options_dialog_action = QAction(self)
+        self.options_dialog_action.triggered.connect(self.show_options)
+
         self.live_log_action = QAction(self)
         self.live_log_action.setCheckable(True)
         self.live_log_action.setShortcut(QKeySequence("Ctrl+L"))
@@ -947,27 +951,15 @@ class MainWindow(QMainWindow):
         self.file_menu = self.menuBar().addMenu("")
         self.file_menu.addAction(self.exit_action)
 
+        # "Tools" / "Funktionen" contains immediate commands and one entry for
+        # ordinary persistent preferences.  Language, appearance, quit behavior
+        # and tray visibility live in the Options dialog instead of nested menus.
         self.options_menu = self.menuBar().addMenu("")
-
-        self.language_menu = self.options_menu.addMenu("")
-        self.language_menu.addAction(self.english_action)
-        self.language_menu.addAction(self.german_action)
-
-        self.appearance_menu = self.options_menu.addMenu("")
-        self.appearance_menu.addAction(self.system_theme_action)
-        self.appearance_menu.addAction(self.light_theme_action)
-        self.appearance_menu.addAction(self.dark_theme_action)
-
-        self.quit_behavior_menu = self.options_menu.addMenu("")
-        self.quit_behavior_menu.addAction(self.quit_ask_action)
-        self.quit_behavior_menu.addAction(self.quit_disconnect_action)
-        self.quit_behavior_menu.addAction(self.quit_leave_action)
-
         self.options_menu.addAction(self.kill_switch_action)
-        self.options_menu.addSeparator()
         self.options_menu.addAction(self.credentials_action)
         self.options_menu.addAction(self.live_log_action)
-        self.options_menu.addAction(self.tray_action)
+        self.options_menu.addSeparator()
+        self.options_menu.addAction(self.options_dialog_action)
 
         self.help_menu = self.menuBar().addMenu("")
         self.help_menu.addAction(self.emergency_reset_action)
@@ -2085,17 +2077,12 @@ class MainWindow(QMainWindow):
         self.file_menu.setTitle(tr("menu.file"))
         self.exit_action.setText(tr("menu.exit"))
 
-        self.options_menu.setTitle(tr("menu.options"))
-        self.language_menu.setTitle(tr("menu.language"))
+        self.options_menu.setTitle(tr("menu.tools"))
         self.english_action.setText(tr("menu.english"))
         self.german_action.setText(tr("menu.german"))
-
-        self.appearance_menu.setTitle(tr("menu.appearance"))
         self.system_theme_action.setText(tr("menu.system"))
         self.light_theme_action.setText(tr("menu.light"))
         self.dark_theme_action.setText(tr("menu.dark"))
-
-        self.quit_behavior_menu.setTitle(tr("menu.quit_behavior"))
         self.quit_ask_action.setText(tr("menu.quit_ask"))
         self.quit_disconnect_action.setText(tr("menu.quit_disconnect"))
         self.quit_leave_action.setText(tr("menu.quit_leave"))
@@ -2103,6 +2090,7 @@ class MainWindow(QMainWindow):
         self.kill_switch_action.setText(tr("menu.kill_switch"))
         self.kill_switch_action.setToolTip(tr("menu.kill_switch_tooltip"))
         self.credentials_action.setText(tr("menu.credentials"))
+        self.options_dialog_action.setText(tr("menu.options_dialog"))
         self.live_log_action.setText(tr("menu.live_log"))
         self.tray_action.setText(tr("menu.tray"))
 
@@ -2174,6 +2162,29 @@ class MainWindow(QMainWindow):
             self._update_system_button()
             self.update_connection_status(force=True)
             self._rebuild_tray_menu()
+
+    def show_options(self) -> None:
+        dialog = OptionsDialog(self.settings, self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        values = dialog.values()
+        current_theme = str(self.settings.value("ui/theme", "system"))
+        current_quit_behavior = str(
+            self.settings.value("ui/quit_behavior", "ask")
+        )
+        current_tray_enabled = bool_value(
+            self.settings, "ui/tray_enabled", True
+        )
+
+        if values.language_code != language():
+            self.change_language(values.language_code)
+        if values.theme != current_theme:
+            self.change_theme(values.theme)
+        if values.quit_behavior != current_quit_behavior:
+            self.change_quit_behavior(values.quit_behavior)
+        if values.tray_enabled != current_tray_enabled:
+            self._tray_setting_changed(values.tray_enabled)
 
     def change_language(self, language_code: str) -> None:
         if language_code == language():

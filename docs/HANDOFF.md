@@ -3,7 +3,7 @@
 **Purpose:** Continuity document for future ChatGPT conversations and later PIA Bazzite development.
 **Last updated:** 2026-08-12
 **Current public stable release:** **PIA Bazzite 0.6.0**
-**Current development baseline:** **0.7.0 development — Stage 1 verified; Stage 2 server-favorites feature fully integrated and verified (2A core, 2B main window, 2C tray, 2D integrated freeze)**
+**Current development baseline:** **0.7.0 development — Stage 1 verified; Stage 2 server favorites fully verified; Stage 3A Options-window foundation verified**
 **Stable release tag:** `v0.6.0`
 **Stable release commit:** `4df051f` (`feat: prepare PIA Bazzite 0.6.0 release`)
 **Repository:** https://github.com/adventureFAN/PIA-Bazzite
@@ -470,8 +470,17 @@ Current candidate roadmap, not promises:
 - Stage 2 introduces no parallel VPN connection path: main-window row selection and tray favorite actions continue to reuse the existing connection/server-switch machinery. The favorite store remains identity/display-only and never supplies stale endpoint data.
 - Treat the complete **Server Favorites** feature as integrated and frozen for 0.7 development. Future changes to favorites must preserve the Stage 2A/2B/2C invariants and rerun the corresponding focused gates plus a targeted real UI/tray check.
 
+**Stage 3A verified — Options-window foundation (2026-08-12):**
+
+- The former visible `Options` / `Optionen` menu is renamed to `Tools` in English and `Funktionen` in German so the menu can contain an `Options…` / `Optionen …` dialog entry without the awkward `Options → Options…` duplication. `Funktionen` was chosen after real-UI review because it fits the direct Session Kill Switch/action entries better than the initially tried `Extras`. The internal `options_menu` object name is not a public UX contract.
+- The fixed-size Options dialog contains only ordinary persistent preferences: language, appearance/theme, behavior when quitting with an active VPN, and whether the system-tray icon is shown. The dialog is transactional: Cancel changes nothing; Save applies the selected values through the existing main-window preference paths.
+- `Re-enter credentials…`, `Show Live Log`, and the Kill Switch toggle deliberately remain direct Tools/Funktionen actions. Credential re-entry is a command rather than a preference; Live Log is a frequent diagnostic/view toggle and keeps `Ctrl+L`; the Kill Switch is an immediate security state change that may require privileged verification and therefore must not be hidden behind a generic modal settings transaction.
+- The user-facing toggle is now explicitly named `Use Session Kill Switch` / `Session Kill Switch verwenden`. This reflects the already-documented security boundary: protection is fail-closed while the current system session is running but is not boot-persistent across reboot/kernel crash/power loss. Do not casually shorten this toggle back to a generic `Kill Switch` label. Status summaries may remain concise where context is already clear.
+- Stage 3A intentionally adds no public-IP/geolocation provider logic yet. The Options window is the UI foundation for the next provider-selection stages; current candidate design remains Automatic/Recommended as the default with a small number of maintained free alternatives rather than an unbounded provider list.
+- Focused static regression coverage lives in `tests/ui/test_options_dialog_stage3a.py`; `tools/0.7-stage3a-options-window-self-test.sh` runs it together with the existing release self-test without importing/running the real Qt GUI. The focused Stage 3A gate and inherited release self-test passed. Real Bazzite verification is complete: the dialog keeps its fixed size; all selector fields use the accepted common alignment/width; Cancel leaves all preferences unchanged; language and System/Light/Dark appearance changes apply correctly; all active-VPN quit-behavior choices retain the established behavior; tray visibility can be disabled/re-enabled; and saved choices persist across reopening/restart. The German `Funktionen` label was accepted for this stage. A possible later cosmetic rename back to `Extras` is explicitly a separate polish decision and must not reopen or destabilize the verified Stage 3A behavior. Treat Stage 3A as verified.
+
 - **0.6.1:** only if real bugs/hardening/maintenance items accumulate; do not release solely for the reboot-scope README clarification.
-- **0.7.x next candidates:** Auto-Connect, improved network-change handling, the public-IP/geolocation provider hardening discovered during Stage 2 testing, and an Options dialog when enough real settings exist to justify it. Server Favorites are complete and verified.
+- **0.7.x current sequence:** Stage 3A Options-window foundation is complete and verified. Next, harden public-IP/geolocation handling and add the small provider choice to that dialog. Auto-Connect and improved network-change handling remain later candidates. Server Favorites are complete and verified.
 - **0.8.x candidates:** trusted networks and an optional, carefully tested local-LAN access exception for the Kill Switch.
 - **0.9.x candidate:** PIA port forwarding on supported regions.
 - **Later / high risk:** per-app split tunneling. Treat it as a routing/security project comparable in complexity to the Kill Switch, not a small checkbox.
@@ -616,7 +625,7 @@ Final 0.6.0 polish requirements:
 - replace the generic About message box with a TrainerBridge-like application dialog: centered app icon/name/version/description/license/developer/disclaimer and buttons for Project Page, Third-Party Notices, and Close;
 - keep current wrong-password behavior: credentials are saved without claiming validation, and PIA rejects invalid credentials on actual connect.
 
-Post-0.6.0 UX roadmap: add a real Options dialog once enough settings/features exist to justify it (Auto-Connect, trusted networks, LAN access, and related options are natural candidates).
+Post-0.6.0 UX roadmap note — superseded in 0.7 development: Stage 3A now introduces the real Options dialog using existing persistent UI preferences first; later 0.7 stages will add public-IP/geolocation provider choice, while Auto-Connect, trusted networks and LAN access remain future candidates.
 
 ### Stage 8C.3A Qt-translation import-boundary correction (2026-08-07)
 
@@ -690,8 +699,7 @@ New isolated proof tool: `tools/pia-bazzite-ipv6-guard-host-probe.sh`. Its resul
 
 - Main-window server popup must enforce the 20-row cap on the actual popup/view;
   KDE can ignore `QComboBox.setMaxVisibleItems()` for non-editable combo boxes.
-- Options order: `Kill Switch verwenden` follows the `Beim Beenden mit aktivem
-  VPN` submenu.
+- Historical 0.6.0 menu-order note: `Kill Switch verwenden` followed the `Beim Beenden mit aktivem VPN` submenu. In 0.7 Stage 3A those ordinary preference submenus move into the Options dialog, while the direct toggle remains in Tools/Funktionen and is renamed `Session Kill Switch verwenden`.
 - About dialog keeps Project Page (`https://github.com/adventureFAN/PIA-Bazzite`),
   Third-Party Notices and Close; remove the Log Folder button for 0.6.0.
 - Tray status row shows the connected region/country (or disconnected state);
