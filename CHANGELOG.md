@@ -7,6 +7,7 @@ All notable changes to PIA Bazzite are documented in this file.
 ### Added
 
 - Added the internal persistent server-favorites core for 0.7 development: up to 10 user-owned PIA region favorites can be stored by region ID with last-known display metadata. Missing regions are retained instead of silently deleted, while stale endpoint and ping data are never persisted as favorite connection data.
+- Added the 0.7 main-window favorites UI: server rows expose a separately clickable star, favorites are grouped above the fastest/normal rows, and the popup always opens scrolled to the top so that favorites, Fastest, then the normal ping-sorted regions are visible in that order. Catalog-missing favorites remain visible as disabled rows whose star can still be removed. Active favorite stars and the Fastest marker use a yellow/gold accent icon while inactive stars follow the current theme text color. Catalog-missing non-favorites are not retained.
 
 ### Fixed
 

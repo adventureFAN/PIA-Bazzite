@@ -7,14 +7,20 @@ from html import escape
 from pathlib import Path
 from typing import Any
 
-from PySide6.QtCore import QSettings, QSize, QThreadPool, QTimer, Qt
+from PySide6.QtCore import QEvent, QSettings, QSize, QThreadPool, QTimer, Qt, Signal
 from PySide6.QtGui import (
     QAction,
     QActionGroup,
     QCloseEvent,
+    QColor,
     QFont,
     QFontDatabase,
+    QIcon,
     QKeySequence,
+    QPainter,
+    QPainterPath,
+    QPalette,
+    QPixmap,
     QTextOption,
 )
 from PySide6.QtWidgets import (
@@ -119,6 +125,12 @@ from .pia_api import (
     measure_latencies,
 )
 from .region_cache import load_regions, save_regions
+from .region_favorites import (
+    MAX_FAVORITE_REGIONS,
+    FavoriteAddResult,
+    FavoriteRegion,
+    FavoriteRegionStore,
+)
 from .region_names import (
     localized_region_name,
     public_country_name,
@@ -135,16 +147,87 @@ FASTEST_ID = "__fastest__"
 COMPACT_SIZE = QSize(740, 510)
 LOG_SIZE = QSize(760, 780)
 REGION_POPUP_VISIBLE_ITEMS = 20
+REGION_FAVORITE_TOGGLE_ROLE = int(Qt.ItemDataRole.UserRole) + 1
+REGION_FAVORITE_AVAILABLE_ROLE = int(Qt.ItemDataRole.UserRole) + 2
+REGION_FAVORITE_STAR_HIT_WIDTH = 34
+REGION_MARKER_ICON_SIZE = QSize(18, 18)
+REGION_MARKER_ACCENT_COLOR = "#f4c542"
 PROJECT_URL = "https://github.com/adventureFAN/PIA-Bazzite"
 KILL_SWITCH_RECONCILIATION_REQUIRED_KEY = "kill_switch/reconciliation_required"
 
 
 class RegionComboBox(QComboBox):
-    """Combo box whose popup is capped to the first 20 visible rows on KDE too."""
+    """Region selector with a separately clickable favorite-star hit target.
+
+    The popup still uses the normal QComboBox/QAbstractItemView selection path.
+    Only clicks inside the small star area are intercepted, so toggling a
+    favorite cannot accidentally activate a server or trigger a server switch.
+    The event filter also receives clicks on disabled rows, which lets a
+    catalog-missing favorite remain non-connectable while its star can still be
+    removed by the user.
+    """
+
+    favoriteToggled = Signal(str)
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self._favorite_press_region_id = ""
+        self.setIconSize(REGION_MARKER_ICON_SIZE)
+        self.view().viewport().installEventFilter(self)
+
+    def eventFilter(self, watched: Any, event: Any) -> bool:
+        viewport = self.view().viewport()
+        event_type = event.type()
+        is_mouse_event = event_type in {
+            QEvent.Type.MouseButtonPress,
+            QEvent.Type.MouseButtonRelease,
+        }
+        if watched is viewport and is_mouse_event:
+            if event.button() != Qt.MouseButton.LeftButton:
+                return super().eventFilter(watched, event)
+
+            point = event.position().toPoint()
+            index = self.view().indexAt(point)
+            in_star = False
+            region_id = ""
+            if index.isValid() and bool(index.data(REGION_FAVORITE_TOGGLE_ROLE)):
+                rect = self.view().visualRect(index)
+                in_star = (
+                    rect.left() <= point.x() <= rect.left() + REGION_FAVORITE_STAR_HIT_WIDTH
+                )
+                region_id = str(index.data(Qt.ItemDataRole.UserRole) or "").strip()
+
+            if event_type == QEvent.Type.MouseButtonPress:
+                self._favorite_press_region_id = region_id if in_star else ""
+                if in_star and region_id:
+                    return True
+            else:
+                pressed_region_id = self._favorite_press_region_id
+                self._favorite_press_region_id = ""
+                if in_star and region_id and region_id == pressed_region_id:
+                    QTimer.singleShot(
+                        0,
+                        lambda selected=region_id: self.favoriteToggled.emit(selected),
+                    )
+                    return True
+
+        return super().eventFilter(watched, event)
+
+    def set_region_row_available(self, row: int, available: bool) -> None:
+        self.setItemData(row, bool(available), REGION_FAVORITE_AVAILABLE_ROLE)
+        model = self.model()
+        item_getter = getattr(model, "item", None)
+        item = item_getter(row) if callable(item_getter) else None
+        if item is not None:
+            item.setEnabled(bool(available))
 
     def showPopup(self) -> None:
         super().showPopup()
-        QTimer.singleShot(0, self._limit_popup_height)
+        QTimer.singleShot(0, self._prepare_popup)
+
+    def _prepare_popup(self) -> None:
+        self._limit_popup_height()
+        self.view().scrollToTop()
 
     def _limit_popup_height(self) -> None:
         view = self.view()
@@ -623,6 +706,7 @@ class MainWindow(QMainWindow):
         self.settings = settings
         self.theme_controller = theme_controller
         self.credential_store = CredentialStore(settings)
+        self.region_favorites = FavoriteRegionStore(settings)
         self.thread_pool = QThreadPool.globalInstance()
         self._workers: set[FunctionWorker] = set()
         self._stage4_preview = bool(stage4_preview)
@@ -974,6 +1058,7 @@ class MainWindow(QMainWindow):
         self.region_combo.setMinimumHeight(38)
         self.region_combo.setMaxVisibleItems(REGION_POPUP_VISIBLE_ITEMS)
         self.region_combo.currentIndexChanged.connect(self._selection_changed)
+        self.region_combo.favoriteToggled.connect(self._toggle_region_favorite)
         connection_layout.addWidget(self.region_combo)
 
         self.connection_button = QPushButton()
@@ -2938,6 +3023,7 @@ class MainWindow(QMainWindow):
         def success(result: Any) -> None:
             self._regions_busy = False
             self.regions = list(result)
+            self.region_favorites.refresh_snapshots(self.regions)
             try:
                 save_regions(self.regions)
             except OSError:
@@ -3011,6 +3097,107 @@ class MainWindow(QMainWindow):
 
         self._run_worker(job, on_success=success, on_failure=failure)
 
+    def _favorite_snapshot_matches_query(
+        self,
+        favorite: FavoriteRegion,
+        query: str,
+    ) -> bool:
+        if not query:
+            return True
+        return query in f"{favorite.region_id} {favorite.name}".casefold()
+
+    def _favorite_snapshot_display_name(self, favorite: FavoriteRegion) -> str:
+        name = favorite.name
+        if favorite.geo:
+            geo_text = "virtueller Standort" if language() == "de" else "virtual location"
+            name = f"{name} ({geo_text})"
+        return name
+
+    def _region_marker_icon(self, symbol: str, *, accent: bool) -> QIcon:
+        size = self.region_combo.iconSize()
+        pixmap = QPixmap(size)
+        pixmap.fill(Qt.GlobalColor.transparent)
+
+        painter = QPainter(pixmap)
+        color = (
+            QColor(REGION_MARKER_ACCENT_COLOR)
+            if accent
+            else self.region_combo.palette().color(QPalette.ColorRole.Text)
+        )
+
+        if symbol == "⚡":
+            # Do not rely on the current UI font containing the Unicode
+            # lightning glyph.  Some Linux/Qt font stacks render it as an
+            # emoji/fallback glyph in QAction text but not when QPainter draws
+            # into a QPixmap, which can leave the combo marker blank.
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+            width = float(size.width())
+            height = float(size.height())
+            bolt = QPainterPath()
+            bolt.moveTo(width * 0.58, height * 0.06)
+            bolt.lineTo(width * 0.24, height * 0.53)
+            bolt.lineTo(width * 0.47, height * 0.53)
+            bolt.lineTo(width * 0.35, height * 0.94)
+            bolt.lineTo(width * 0.76, height * 0.42)
+            bolt.lineTo(width * 0.54, height * 0.42)
+            bolt.closeSubpath()
+            painter.fillPath(bolt, color)
+        else:
+            painter.setRenderHint(QPainter.RenderHint.TextAntialiasing, True)
+            font = QFont(self.region_combo.font())
+            font.setBold(symbol == "★")
+            font.setPixelSize(max(12, size.height() - 2))
+            painter.setFont(font)
+            painter.setPen(color)
+            painter.drawText(
+                pixmap.rect(),
+                Qt.AlignmentFlag.AlignCenter,
+                symbol,
+            )
+
+        painter.end()
+        return QIcon(pixmap)
+
+    def _add_region_combo_item(
+        self,
+        *,
+        text: str,
+        region_id: str,
+        favorite: bool,
+        available: bool,
+    ) -> None:
+        star = "★" if favorite else "☆"
+        icon = self._region_marker_icon(star, accent=favorite)
+        self.region_combo.addItem(icon, text, region_id)
+        row = self.region_combo.count() - 1
+        self.region_combo.setItemData(row, True, REGION_FAVORITE_TOGGLE_ROLE)
+        self.region_combo.set_region_row_available(row, available)
+        if available:
+            tooltip_key = (
+                "favorites.remove_tooltip"
+                if favorite
+                else "favorites.add_tooltip"
+            )
+            tooltip = tr(tooltip_key)
+        else:
+            tooltip = tr("favorites.unavailable_tooltip")
+        self.region_combo.setItemData(
+            row,
+            tooltip,
+            Qt.ItemDataRole.ToolTipRole,
+        )
+
+    def _first_selectable_region_index(self) -> int:
+        for row in range(self.region_combo.count()):
+            available = self.region_combo.itemData(
+                row,
+                REGION_FAVORITE_AVAILABLE_ROLE,
+            )
+            if available is False:
+                continue
+            return row
+        return -1
+
     def _populate_region_combo(self) -> None:
         if not hasattr(self, "region_combo"):
             return
@@ -3028,28 +3215,101 @@ class MainWindow(QMainWindow):
             for region in self.regions
             if not query or query in search_haystack(region)
         ]
+        favorite_ids = {
+            favorite.region_id for favorite in self.region_favorites.all()
+        }
+        favorite_regions = [
+            region for region in filtered if region.region_id in favorite_ids
+        ]
+        normal_regions = [
+            region for region in filtered if region.region_id not in favorite_ids
+        ]
+        current_ids = {region.region_id for region in self.regions}
+        missing_favorites = [
+            favorite
+            for favorite in self.region_favorites.all()
+            if favorite.region_id not in current_ids
+            and self._favorite_snapshot_matches_query(favorite, query)
+        ]
 
         self.region_combo.blockSignals(True)
         self.region_combo.clear()
+
+        for region in favorite_regions:
+            self._add_region_combo_item(
+                text=region_display_name(region, language()),
+                region_id=region.region_id,
+                favorite=True,
+                available=True,
+            )
+
+        for favorite in missing_favorites:
+            unavailable = tr("favorites.unavailable_suffix")
+            self._add_region_combo_item(
+                text=f"{self._favorite_snapshot_display_name(favorite)} · {unavailable}",
+                region_id=favorite.region_id,
+                favorite=True,
+                available=False,
+            )
 
         if not query:
             fastest_text = tr("connection.fastest")
             if self.regions and self.regions[0].ping_ms is not None:
                 fastest_text += f" · {self.regions[0].ping_ms:.0f} ms"
-            self.region_combo.addItem(f"⚡ {fastest_text}", FASTEST_ID)
+            fastest_icon = self._region_marker_icon("⚡", accent=True)
+            self.region_combo.addItem(fastest_icon, fastest_text, FASTEST_ID)
+            fastest_row = self.region_combo.count() - 1
+            self.region_combo.setItemData(
+                fastest_row,
+                True,
+                REGION_FAVORITE_AVAILABLE_ROLE,
+            )
 
-        for region in filtered:
-            self.region_combo.addItem(
-                region_display_name(region, language()),
-                region.region_id,
+        for region in normal_regions:
+            self._add_region_combo_item(
+                text=region_display_name(region, language()),
+                region_id=region.region_id,
+                favorite=False,
+                available=True,
             )
 
         target_index = self.region_combo.findData(selected_id)
-        if target_index < 0 and self.region_combo.count() > 0:
-            target_index = 0
+        if target_index >= 0 and self.region_combo.itemData(
+            target_index,
+            REGION_FAVORITE_AVAILABLE_ROLE,
+        ) is False:
+            target_index = -1
+        if target_index < 0:
+            target_index = self._first_selectable_region_index()
         self.region_combo.setCurrentIndex(target_index)
         self.region_combo.blockSignals(False)
         self._update_controls()
+
+    def _toggle_region_favorite(self, region_id: str) -> None:
+        region_id = str(region_id).strip()
+        if not region_id or region_id == FASTEST_ID:
+            return
+
+        if self.region_favorites.is_favorite(region_id):
+            self.region_favorites.remove(region_id)
+        else:
+            region = self._region_by_id(region_id)
+            if region is None:
+                return
+            result = self.region_favorites.add(region)
+            if result == FavoriteAddResult.LIMIT_REACHED:
+                QMessageBox.information(
+                    self,
+                    tr("favorites.limit_title"),
+                    tr(
+                        "favorites.limit_message",
+                        limit=MAX_FAVORITE_REGIONS,
+                    ),
+                )
+                return
+
+        self._populate_region_combo()
+        self._rebuild_tray_menu()
 
     def _selection_changed(self, index: int) -> None:
         if index < 0 or self._region_selection_guard:
@@ -3087,9 +3347,11 @@ class MainWindow(QMainWindow):
             active_region = self._region_by_id(self._active_region_id)
             if active_region is None:
                 return
-            self.region_combo.addItem(
-                region_display_name(active_region, language()),
-                active_region.region_id,
+            self._add_region_combo_item(
+                text=region_display_name(active_region, language()),
+                region_id=active_region.region_id,
+                favorite=self.region_favorites.is_favorite(active_region.region_id),
+                available=True,
             )
             index = self.region_combo.count() - 1
         self._region_selection_guard = True
