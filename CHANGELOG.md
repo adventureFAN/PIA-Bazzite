@@ -4,6 +4,10 @@ All notable changes to PIA Bazzite are documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- Added the internal persistent server-favorites core for 0.7 development: up to 10 user-owned PIA region favorites can be stored by region ID with last-known display metadata. Missing regions are retained instead of silently deleted, while stale endpoint and ping data are never persisted as favorite connection data.
+
 ### Fixed
 
 - Starting PIA Bazzite with the Session Kill Switch merely remembered/armed no longer triggers an unnecessary administrator authorization when the user quits without ever starting a VPN connection. Real or ambiguous surviving Kill Switch state still requires the existing privileged recheck before exit.

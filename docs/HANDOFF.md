@@ -3,7 +3,7 @@
 **Purpose:** Continuity document for future ChatGPT conversations and later PIA Bazzite development.
 **Last updated:** 2026-08-12
 **Current public stable release:** **PIA Bazzite 0.6.0**
-**Current development baseline:** **0.7.0 development — Stage 1 clean-idle quit verified on Bazzite**
+**Current development baseline:** **0.7.0 development — Stage 1 verified; Stage 2A server-favorites core verified; Stage 2B next**
 **Stable release tag:** `v0.6.0`
 **Stable release commit:** `4df051f` (`feat: prepare PIA Bazzite 0.6.0 release`)
 **Repository:** https://github.com/adventureFAN/PIA-Bazzite
@@ -430,6 +430,17 @@ Current candidate roadmap, not promises:
 - Focused regression coverage lives in `tests/connection/test_idle_quit.py`; `tools/0.7-stage1-idle-quit-self-test.sh` runs it together with the relevant A13/crash-recovery quit tests without touching Polkit, NetworkManager, nftables or the real GUI.
 - Verification completed on real Bazzite: with the Kill Switch preference remembered ON, a clean app start followed by Quit without ever connecting exits without a Polkit/admin-password prompt. A separate connected VPN + Kill Switch exit still shows the existing quit confirmation and follows the protected disconnect/quit path; no unnecessary second Polkit prompt appeared because the already-authorized helper session remained available. The focused Stage 1 self-test also passed together with the relevant A13/crash-recovery/static regression suites, including coverage that real or ambiguous blocking/recovery hints still require the existing protected recheck and that explicitly disabling the Kill Switch still checks privileged host state. Treat Stage 1 as verified.
 
+**Stage 2A verified — persistent server-favorites core (2026-08-12):**
+
+- Server favorites are deliberately user-owned state. PIA Bazzite may update the saved display fallback for a favorite when that same `region_id` appears in a later successful PIA catalog, but it must **never automatically delete a favorite merely because the region disappears from a refresh**.
+- The feature limit is **10 favorites**. Missing/unavailable favorites continue counting toward that limit until the user explicitly removes them; removing an unavailable favorite immediately frees a slot.
+- Persistence lives behind `FavoriteRegionStore` in `pia_bazzite/region_favorites.py`. Each favorite stores only `region_id`, the last known PIA `name`, and the `geo` flag. Stale endpoint IP/hostname/ping data is intentionally not persisted as favorite state and must never be used to connect to a region that is absent from the current catalog.
+- “Unavailable” means **absent from the current successfully loaded PIA region catalog**, not “latency probe failed”. A catalogued region with `ping_ms is None` remains an available region and keeps the existing “not reachable” semantics.
+- The core exposes availability as a current `Region` object or `None`. This is the safety boundary for later UI work: an unavailable favorite can be shown and removed, but cannot provide stale connection endpoint data.
+- Future Stage 2B main-window behavior: only unavailable **favorites** may remain visible as retained/disabled rows. A non-favorite region that PIA no longer supplies should not be kept as a gray zombie row. The unavailable row itself must not be connectable, while its favorite control must remain usable so the user can remove it.
+- Future Stage 2C tray behavior: show a Favorites submenu only when at least one favorite exists; unavailable favorites remain visible but disabled/non-connectable. All available favorite actions must reuse the existing `connect_region()` path rather than create separate VPN/server-switch logic.
+- Focused regression coverage lives in `tests/connection/test_region_favorites.py`; `tools/0.7-stage2a-server-favorites-core-self-test.sh` runs the 13 core tests plus the existing release self-test without contacting PIA or mutating real settings/network/firewall/GUI state. The complete Stage 2A self-test passed in the real development checkout on Bazzite, including all 13 focused favorites-core tests and the existing release self-test. Because Stage 2A intentionally has no GUI, PIA-network, helper, firewall, or NetworkManager integration yet, this non-mutating checkout verification is the required acceptance proof. Treat Stage 2A as verified.
+
 - **0.6.1:** only if real bugs/hardening/maintenance items accumulate; do not release solely for the reboot-scope README clarification.
 - **0.7.x candidates:** server favorites, Auto-Connect, improved network-change handling, and an Options dialog when enough real settings exist to justify it.
 - **0.8.x candidates:** trusted networks and an optional, carefully tested local-LAN access exception for the Kill Switch.
@@ -512,6 +523,9 @@ Before declaring a future change finished, ask:
 - Can a user-controlled path, table name or arbitrary command cross the privileged helper boundary? It should not.
 - Does Polkit cancellation before mutation leave VPN/firewall unchanged and present a neutral cancellation result?
 - Does single-instance protection prevent two competing GUI/controllers?
+- Do server favorites remain capped at 10, user-owned, and persistent without silently deleting catalog-missing favorites?
+- Is a catalog-missing favorite non-connectable without using stale endpoint data, while a catalog-missing non-favorite disappears normally?
+- Does `ping_ms is None` remain distinct from a region being absent from the PIA catalog?
 - Do Live Log/public diagnostics remain free of credentials, PIA tokens and WireGuard private keys?
 - Is disconnected public-IP lookup still manual-only?
 - Are public docs still honest about reboot scope, Limited connectivity and IPv6 behavior?
