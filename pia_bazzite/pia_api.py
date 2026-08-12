@@ -23,7 +23,8 @@ import requests
 
 from . import __version__
 from .app_errors import AppError
-from .models import PublicNetworkInfo, Region
+from .models import Region
+from .public_network import fetch_public_network_info
 
 if TYPE_CHECKING:
     from .credentials import Credentials
@@ -31,7 +32,6 @@ if TYPE_CHECKING:
 
 SERVER_LIST_URL = "https://serverlist.piaservers.net/vpninfo/servers/v6"
 TOKEN_URL = "https://www.privateinternetaccess.com/api/client/v2/token"
-PUBLIC_NETWORK_URL = "https://api.country.is/"
 WIREGUARD_PORT = 1337
 
 
@@ -561,41 +561,3 @@ def create_wireguard_config(
             "error.config_write.message",
             details=str(exc),
         ) from exc
-
-
-def fetch_public_network_info(timeout: float = 10.0) -> PublicNetworkInfo:
-    try:
-        response = requests.get(PUBLIC_NETWORK_URL, timeout=timeout)
-        response.raise_for_status()
-        payload = response.json()
-    except requests.Timeout as exc:
-        raise PiaError(
-            "error.public_ip.title",
-            "error.public_ip.message",
-            details=str(exc),
-        ) from exc
-    except (requests.RequestException, ValueError) as exc:
-        raise PiaError(
-            "error.public_ip.title",
-            "error.public_ip.message",
-            details=str(exc),
-        ) from exc
-
-    if not isinstance(payload, dict):
-        raise PiaError(
-            "error.public_ip.title",
-            "error.public_ip.message",
-            details="Public-IP service returned a non-object response.",
-        )
-    try:
-        ip_address = _validate_ip(payload.get("ip"), "public IP")
-        country_code = _reject_control_text(payload.get("country"), "country code", max_length=2).upper()
-        if not re.fullmatch(r"[A-Z]{2}", country_code):
-            raise _pia_validation_error("country code is invalid")
-    except PiaError as exc:
-        raise PiaError(
-            "error.public_ip.title",
-            "error.public_ip.message",
-            details=exc.details,
-        ) from exc
-    return PublicNetworkInfo(ip_address=ip_address, country_code=country_code)
