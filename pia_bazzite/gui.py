@@ -4892,15 +4892,7 @@ class MainWindow(QMainWindow):
             return
 
         if not connected:
-            kill_switch_may_be_active = (
-                self.kill_switch_runtime.feature_enabled
-                and (
-                    self._kill_switch_status is None
-                    or self._kill_switch_status.present
-                    or bool(self._kill_switch_status_error)
-                )
-            )
-            if kill_switch_may_be_active:
+            if self._disconnected_kill_switch_may_block(connected=False):
                 self._recheck_kill_switch_status(
                     after_absent=self._final_quit,
                     announce_absent=False,

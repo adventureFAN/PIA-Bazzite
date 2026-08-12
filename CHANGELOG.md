@@ -2,6 +2,12 @@
 
 All notable changes to PIA Bazzite are documented in this file.
 
+## [Unreleased]
+
+### Fixed
+
+- Starting PIA Bazzite with the Session Kill Switch merely remembered/armed no longer triggers an unnecessary administrator authorization when the user quits without ever starting a VPN connection. Real or ambiguous surviving Kill Switch state still requires the existing privileged recheck before exit.
+
 ## [0.6.0] - 2026-08-08
 
 ### Added

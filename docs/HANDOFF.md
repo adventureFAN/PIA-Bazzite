@@ -1,9 +1,9 @@
 # PIA Bazzite - Living HANDOFF
 
 **Purpose:** Continuity document for future ChatGPT conversations and later PIA Bazzite development.
-**Last updated:** 2026-08-09
+**Last updated:** 2026-08-12
 **Current public stable release:** **PIA Bazzite 0.6.0**
-**Current development baseline:** **post-release 0.6.0 `main`**
+**Current development baseline:** **0.7.0 development — Stage 1 clean-idle quit verified on Bazzite**
 **Stable release tag:** `v0.6.0`
 **Stable release commit:** `4df051f` (`feat: prepare PIA Bazzite 0.6.0 release`)
 **Repository:** https://github.com/adventureFAN/PIA-Bazzite
@@ -204,6 +204,8 @@ A genuine startup-recovery failure should offer a direct retry plus the same exp
 
 - A remembered Kill Switch preference while the VPN is cleanly disconnected is only an **armed preference**, not proof that a firewall is active.
 - Normal disconnected startup with Kill Switch remembered ON must not require Polkit and must not show an unnecessary Red state.
+- Quitting from that same clean disconnected/armed-only state must also remain Polkit-free. `request_quit()` should use the existing `_disconnected_kill_switch_may_block()` recovery gate instead of treating an unqueried helper status (`None`) as evidence that a firewall may exist. Real/ambiguous recovery hints still require the privileged status recheck before exit.
+- Explicitly disabling the Kill Switch preference remains different: it intentionally verifies privileged host firewall state before changing the protection preference, so an authorization prompt there is acceptable.
 - Enabling Kill Switch from OFF may request Polkit so the restricted privileged boundary can be checked/prepared.
 - A protected connect can require authorization. If the user cancels Polkit before privileged mutation, the VPN must not start and no half-created firewall may remain.
 - Deliberate Polkit cancellation in these pre-mutation paths is a neutral user cancellation/authorization-not-granted outcome, not a catastrophic application error.
@@ -415,6 +417,19 @@ Preferred approach:
 
 Current candidate roadmap, not promises:
 
+### 0.7.0 development approach
+
+0.7.0 is intentionally being built in small, separately testable stages rather than as one large feature drop. Each bug fix or feature should have a narrow goal, focused regression coverage, a real-host/UI proof when relevant, a HANDOFF update, and a clean commit before the next stage begins.
+
+**Stage 1 complete — clean-idle quit UX (2026-08-12):**
+
+- Real-use finding: after more than a week of normal use, quitting PIA Bazzite immediately after startup could request administrator authorization when the Session Kill Switch preference was remembered ON, even though no VPN connection had been started in that process and no recovery hint existed.
+- Cause: `request_quit()` treated `_kill_switch_status is None` as “the firewall may be active”. A fresh armed-only startup deliberately keeps that status unknown because A13 removed unnecessary startup Polkit; therefore the quit path accidentally reintroduced the prompt.
+- Implemented fix: `request_quit()` reuses `_disconnected_kill_switch_may_block(connected=False)`. With no live VPN, no cached firewall/error, no crash record and no reconciliation marker, quitting is immediate and unprivileged. If any real/ambiguous protection hint exists, the existing privileged read-only recheck remains mandatory before exit.
+- Scope is deliberately narrow: **do not change the explicit Kill Switch disable path**. Turning the preference off may still request authorization so actual host firewall state can be verified before protection is changed.
+- Focused regression coverage lives in `tests/connection/test_idle_quit.py`; `tools/0.7-stage1-idle-quit-self-test.sh` runs it together with the relevant A13/crash-recovery quit tests without touching Polkit, NetworkManager, nftables or the real GUI.
+- Verification completed on real Bazzite: with the Kill Switch preference remembered ON, a clean app start followed by Quit without ever connecting exits without a Polkit/admin-password prompt. A separate connected VPN + Kill Switch exit still shows the existing quit confirmation and follows the protected disconnect/quit path; no unnecessary second Polkit prompt appeared because the already-authorized helper session remained available. The focused Stage 1 self-test also passed together with the relevant A13/crash-recovery/static regression suites, including coverage that real or ambiguous blocking/recovery hints still require the existing protected recheck and that explicitly disabling the Kill Switch still checks privileged host state. Treat Stage 1 as verified.
+
 - **0.6.1:** only if real bugs/hardening/maintenance items accumulate; do not release solely for the reboot-scope README clarification.
 - **0.7.x candidates:** server favorites, Auto-Connect, improved network-change handling, and an Options dialog when enough real settings exist to justify it.
 - **0.8.x candidates:** trusted networks and an optional, carefully tested local-LAN access exception for the Kill Switch.
@@ -479,6 +494,7 @@ Before declaring a future change finished, ask:
 
 - Did I inspect the current complete source before changing it?
 - Does normal disconnected startup with Kill Switch remembered ON remain Polkit-free?
+- Does quitting immediately from that clean armed-only state remain Polkit-free while real/ambiguous recovery state still forces the privileged recheck?
 - With Kill Switch OFF, is the exact IPv6-only guard active before/while the VPN is connected and removed only after verified intentional disconnect?
 - Can native IPv6 bypass the normal VPN? It must not.
 - With Kill Switch ON, is the full firewall active and verified **before** NetworkManager starts the VPN?
