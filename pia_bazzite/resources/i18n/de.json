@@ -479,5 +479,6 @@
   "tray.status_disconnected": "Getrennt",
   "tray.switch_server": "Server wechseln …",
   "tray.unavailable_message": "Der Desktop stellt keinen Systembereich bereit. Die Option wurde deaktiviert.",
-  "tray.unavailable_title": "Systembereich nicht verfügbar"
+  "tray.unavailable_title": "Systembereich nicht verfügbar",
+  "tray.favorites": "Favoriten"
 }

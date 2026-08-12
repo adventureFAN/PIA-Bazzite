@@ -4994,6 +4994,15 @@ class MainWindow(QMainWindow):
         full_list_action.triggered.connect(self.show_full_server_list)
         locations_menu.addAction(full_list_action)
 
+        self._add_tray_favorites_menu(
+            menu,
+            enabled=(
+                network_state_known
+                and not self._connection_busy
+                and not disconnected_lock
+            ),
+        )
+
         menu.addSeparator()
         show_action = QAction(tr("tray.show"), menu)
         show_action.triggered.connect(self.show_window)
@@ -5008,6 +5017,56 @@ class MainWindow(QMainWindow):
 
         self.tray.setIcon(status_icon(state.icon_state))
         self.tray.setToolTip(tr(state.tray_tooltip_key))
+
+    def _add_tray_favorites_menu(self, menu: QMenu, *, enabled: bool) -> QMenu | None:
+        """Add a root-level Favorites submenu when saved favorites exist.
+
+        Favorites intentionally sit next to Connect/Switch server in the tray
+        root so they are one quick submenu away.  The normal location menu is
+        left unchanged.  Catalog-missing favorites remain visible but
+        disabled and never receive stale connection data.
+        """
+
+        favorites = self.region_favorites.all()
+        if not favorites:
+            return None
+
+        favorites_menu = menu.addMenu(tr("tray.favorites"))
+        favorites_menu.setEnabled(enabled)
+
+        current_by_id = {region.region_id: region for region in self.regions}
+        favorite_ids = {favorite.region_id for favorite in favorites}
+        available_regions = [
+            region for region in self.regions if region.region_id in favorite_ids
+        ]
+        missing_favorites = [
+            favorite
+            for favorite in favorites
+            if favorite.region_id not in current_by_id
+        ]
+
+        for region in available_regions:
+            action = QAction(
+                region_display_name(region, language()),
+                favorites_menu,
+            )
+            action.setIcon(self._region_marker_icon("★", accent=True))
+            action.triggered.connect(
+                lambda checked=False, selected=region: self.connect_region(selected)
+            )
+            favorites_menu.addAction(action)
+
+        for favorite in missing_favorites:
+            unavailable = tr("favorites.unavailable_suffix")
+            action = QAction(
+                f"{self._favorite_snapshot_display_name(favorite)} · {unavailable}",
+                favorites_menu,
+            )
+            action.setIcon(self._region_marker_icon("★", accent=True))
+            action.setEnabled(False)
+            favorites_menu.addAction(action)
+
+        return favorites_menu
 
     def _tray_setting_changed(self, checked: bool) -> None:
         self.settings.setValue("ui/tray_enabled", checked)

@@ -479,5 +479,6 @@
   "tray.status_disconnected": "Disconnected",
   "tray.switch_server": "Switch server…",
   "tray.unavailable_message": "The desktop did not provide a system tray. The tray option was disabled.",
-  "tray.unavailable_title": "System tray unavailable"
+  "tray.unavailable_title": "System tray unavailable",
+  "tray.favorites": "Favorites"
 }
