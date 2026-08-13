@@ -8,7 +8,7 @@ import tempfile
 import unittest
 from unittest import mock
 
-from pia_bazzite import pia_api
+from pia_bazzite import __version__, pia_api
 from pia_bazzite.helper_installation import PYTHON_PATH, _verify_fixed_executable
 from pia_bazzite.models import Region
 
@@ -40,7 +40,9 @@ class Stage8C2PrivacyAndDocsTests(unittest.TestCase):
         security = (ROOT / "SECURITY.md").read_text(encoding="utf-8")
         handoff = (ROOT / "docs/HANDOFF.md").read_text(encoding="utf-8")
         self.assertIn("Session Kill Switch", security)
-        self.assertIn("api.country.is", security)
+        self.assertIn("GeoJS", security)
+        self.assertIn("FreeIPAPI", security)
+        self.assertIn("ipwho.is", security)
         self.assertIn("Stage 8C", handoff)
         self.assertIn("0.7.x current sequence", handoff)
         self.assertIn("trusted networks", handoff)
@@ -48,7 +50,7 @@ class Stage8C2PrivacyAndDocsTests(unittest.TestCase):
         self.assertIn("split tunneling", handoff)
 
     def test_release_docs_explain_ipv6_policy_and_preserve_project_credits(self) -> None:
-        notes = (ROOT / "RELEASE_NOTES_0.6.0.md").read_text(encoding="utf-8")
+        notes = (ROOT / f"RELEASE_NOTES_{__version__}.md").read_text(encoding="utf-8")
         readme = (ROOT / "README.md").read_text(encoding="utf-8")
         for text in (notes, readme):
             self.assertIn("IPv6 `AllowedIPs` route", text)

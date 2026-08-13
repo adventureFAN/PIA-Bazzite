@@ -12,10 +12,14 @@ and does not require PIA's `manual-connections` repository.
 
 - Connect, disconnect, and switch PIA locations.
 - Measure locations and sort them by latency.
+- Search locations and filter normal, virtual, and streaming-optimized entries.
+- Save up to 10 persistent favorite locations and access them from the main window and tray.
 - Choose the fastest location automatically.
+- Auto-Connect to the last selected, fastest, favorite, or another fixed location.
+- Optional login autostart with tray-first startup when the system tray is enabled.
 - Quick access to up to 20 low-latency locations from the system tray.
 - Native NetworkManager and Plasma notification integration.
-- Public IP and detected country display.
+- Optional public IP and detected country display with selectable GeoJS, FreeIPAPI, and ipwho.is providers.
 - Optional fail-closed Session Kill Switch for IPv4, IPv6, and direct DNS paths.
 - Protected reconnect and server switching while the Kill Switch remains active.
 - Crash-safe recovery and verified automatic takeover after an application restart.
@@ -26,16 +30,18 @@ and does not require PIA's `manual-connections` repository.
 - Secure credential storage through the Linux Secret Service keyring.
 - English and German user interfaces.
 - System, Light, and Dark appearance modes.
+- Physical-network loss/recovery awareness so stale VPN-connected presentation is avoided when Wi-Fi/Ethernet disappears.
 - Optional live log with secret redaction and IP masking.
 - Single-instance behavior and XDG-compliant storage locations.
 
 ### Public-IP lookup privacy
 
-The Public IP / country display uses `https://api.country.is/`. PIA Bazzite does
-not automatically query that service while the VPN is verified disconnected.
-While disconnected, the lookup is performed only when you explicitly use the
-public-IP refresh control. Automatic refreshes are limited to a verified VPN
-connection.
+The Public IP / country display can use **GeoJS** (default), **FreeIPAPI**, or
+**ipwho.is**. The selected external provider receives the public egress IP as part
+of the lookup. PIA Bazzite does not automatically perform this lookup while the
+VPN is verified disconnected, and disabling **Public IP and location** in Options
+suppresses the provider lookup entirely. While disconnected, a lookup happens
+only when the user explicitly requests a public-IP refresh.
 
 > [!IMPORTANT]
 > **Kill Switch scope:** PIA Bazzite's optional Kill Switch protects the current
@@ -62,12 +68,11 @@ PIA Bazzite also does not provide:
 
 - split tunneling;
 - port forwarding;
-- automatic connection at login;
 - support guarantees outside Bazzite.
 
 ## Recommended installation: AppImage
 
-1. Download `PIA-Bazzite-0.6.0-x86_64.AppImage` from the GitHub release.
+1. Download `PIA-Bazzite-0.7.0-x86_64.AppImage` from the GitHub release.
 2. Integrate it with **Gear Lever**, or mark it executable and launch it.
 3. Enter your PIA username and password on first start.
 4. Choose a location and connect.
@@ -142,7 +147,7 @@ application log.
 ## Building the AppImage
 
 The release workflow builds on Ubuntu 22.04 and creates the x86_64
-AppImage automatically when a version tag such as `v0.6.0` is pushed.
+AppImage automatically when a version tag such as `v0.7.0` is pushed.
 
 A local build is also available:
 

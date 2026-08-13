@@ -13,9 +13,10 @@
       NetworkManager without the official manual-connections scripts.
     </p>
     <p>
-      It provides location selection, latency measurements, public-IP
-      status, temporary IPv6 protection, a system tray, an optional live
-      log, and English and German interfaces.
+      It provides favorites, location search and filtering, latency measurements,
+      Auto-Connect and login autostart, selectable public-IP/location status,
+      verified IPv6 protection, a system tray, an optional live log, and
+      English and German interfaces.
     </p>
     <p xml:lang="de">
       PIA Bazzite ist ein inoffizieller Desktop-Client für Private
@@ -43,6 +44,15 @@
   </supports>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="0.7.0" date="2026-08-13">
+      <description>
+        <p>Adds persistent server favorites, Auto-Connect and login autostart,
+        selectable public-IP/location providers, physical-network state
+        detection, searchable/filterable locations, and a redesigned KDE-oriented
+        Options and tray experience while preserving the verified Session Kill
+        Switch and normal-mode IPv6 protections.</p>
+      </description>
+    </release>
     <release version="0.6.0" date="2026-08-08">
       <description>
         <p>Adds the optional fail-closed Session Kill Switch with protected

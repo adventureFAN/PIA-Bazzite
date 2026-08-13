@@ -12,7 +12,7 @@ without secrets and ask for a private contact channel.
 
 ## Session Kill Switch
 
-PIA Bazzite 0.6.0 includes an optional fail-closed **Session Kill Switch**. It
+PIA Bazzite 0.7.0 includes an optional fail-closed **Session Kill Switch**. It
 uses a small root-owned helper, authorized through Polkit, to manage one fixed
 nftables boundary. The GUI remains unprivileged.
 
@@ -49,7 +49,9 @@ WireGuard private keys must not be written to the live log. The live log also
 masks public IP addresses, but users should still inspect logs before sharing
 them.
 
-The public-IP/country display uses `https://api.country.is/`. PIA Bazzite does
-not automatically contact that service while the VPN is verified disconnected.
-A disconnected lookup happens only when the user explicitly requests a public-IP
-refresh; automatic refreshes are limited to a verified VPN connection.
+The public-IP/country display can use GeoJS (default), FreeIPAPI, or ipwho.is.
+The selected provider necessarily sees the public egress IP used for the lookup.
+PIA Bazzite does not automatically contact a public-network provider while the VPN
+is verified disconnected, and disabling the public IP/location display suppresses
+those lookups entirely. A disconnected lookup happens only when the user explicitly
+requests a public-IP refresh.

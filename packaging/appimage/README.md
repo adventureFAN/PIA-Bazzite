@@ -16,7 +16,7 @@ Secret Service keyring, and desktop notifications.
 
 ## Session Kill Switch helper payload
 
-The 0.6.0 AppImage carries a fixed helper installation payload under
+The AppImage carries a fixed helper installation payload under
 `usr/share/pia-bazzite/kill-switch-helper-bundle`. The payload contains only the
 production helper/session launchers, their Python package, and the fixed installer,
 plus a SHA-256 manifest generated during the build.
@@ -64,4 +64,4 @@ bash tools/release-stage8c2-packaging-host-test.sh
 It builds a fresh development AppImage through the isolated Podman path, verifies
 the SHA-256 sidecar, extracts the real artifact, and checks provenance, AppStream
 metadata aliases, third-party inventory/license material, privacy markers, and the
-0.6.0 runtime version without installing the privileged helper.
+current runtime version without installing the privileged helper.

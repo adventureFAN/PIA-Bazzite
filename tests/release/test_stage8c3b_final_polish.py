@@ -4,13 +4,15 @@ import json
 from pathlib import Path
 import unittest
 
+from pia_bazzite import __version__
+
 
 ROOT = Path(__file__).resolve().parents[2]
 GUI = ROOT / "pia_bazzite" / "gui.py"
 DE = ROOT / "pia_bazzite" / "resources" / "i18n" / "de.json"
 EN = ROOT / "pia_bazzite" / "resources" / "i18n" / "en.json"
 README = ROOT / "README.md"
-RELEASE_NOTES = ROOT / "RELEASE_NOTES_0.6.0.md"
+RELEASE_NOTES = ROOT / f"RELEASE_NOTES_{__version__}.md"
 
 
 class Stage8C3BFinalPolishTests(unittest.TestCase):

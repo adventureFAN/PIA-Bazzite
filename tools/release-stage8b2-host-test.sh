@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
-VERSION="0.6.0"
+VERSION="$(PYTHONPATH="$ROOT" "$ROOT/.venv/bin/python" -c 'from pia_bazzite import __version__; print(__version__)')"
 ARCH="x86_64"
 APPIMAGE="$ROOT/dist/PIA-Bazzite-${VERSION}-${ARCH}.AppImage"
 CHECKSUM="$APPIMAGE.sha256"
@@ -18,7 +18,7 @@ RESET_DELAY="15min"
 mkdir -p "$REPORT_DIR" "$ROOT/build"
 exec > >(tee "$REPORT") 2>&1
 
-printf 'PIA Bazzite Stage-8B.2 real 0.6.0 AppImage helper install/upgrade host test\n'
+printf 'PIA Bazzite Stage-8B.2 real %s AppImage helper install/upgrade host test\n' "$VERSION"
 printf 'Generated: %s\n' "$(date --iso-8601=seconds)"
 printf 'This test builds the release-candidate AppImage, verifies its embedded helper bundle,\n'
 printf 'proves that a normal AppImage FUSE bundle can be copied into the exact private staging\n'
@@ -114,7 +114,7 @@ PY
 )"
 printf 'INFO    Original Kill Switch preference recorded for restoration after the test.\n'
 
-printf '\n%s\n' '--- Build real 0.6.0 release-candidate AppImage ---'
+printf '\n--- Build real %s release-candidate AppImage ---\n' "$VERSION"
 rm -f "$APPIMAGE" "$CHECKSUM"
 bash "$ROOT/packaging/build-appimage-podman.sh"
 [[ -x "$APPIMAGE" ]] || fail "Release-candidate AppImage was not built: $APPIMAGE"
@@ -124,8 +124,8 @@ bash "$ROOT/packaging/build-appimage-podman.sh"
   sha256sum -c "$(basename "$CHECKSUM")"
 ) || fail 'The AppImage SHA-256 sidecar does not verify from the release directory.'
 VERSION_OUTPUT="$(APPIMAGE_EXTRACT_AND_RUN=1 "$APPIMAGE" --version)"
-[[ "$VERSION_OUTPUT" == 'PIA Bazzite 0.6.0' ]] || fail "Unexpected AppImage version output: $VERSION_OUTPUT"
-printf 'PASS    Built AppImage reports PIA Bazzite 0.6.0 and its portable SHA-256 sidecar verifies.\n'
+[[ "$VERSION_OUTPUT" == "PIA Bazzite $VERSION" ]] || fail "Unexpected AppImage version output: $VERSION_OUTPUT"
+printf 'PASS    Built AppImage reports PIA Bazzite %s and its portable SHA-256 sidecar verifies.\n' "$VERSION"
 
 printf '\n%s\n' '--- Independently inspect the embedded helper bundle ---'
 rm -rf "$EXTRACT_ROOT"
@@ -137,7 +137,7 @@ mkdir -p "$EXTRACT_ROOT"
 [[ -d "$BUNDLE" ]] || fail 'The extracted AppImage does not contain the fixed helper bundle.'
 PYTHONPATH="$ROOT" "$ROOT/.venv/bin/python" \
   "$ROOT/tools/pia-bazzite-stage8b2-appimage-inspector.py" bundle --bundle "$BUNDLE" >/dev/null
-printf 'PASS    Extracted AppImage contains the exact 0.6.0 helper payload and manifest.\n'
+printf 'PASS    Extracted AppImage contains the exact %s helper payload and manifest.\n' "$VERSION"
 
 printf '\n%s\n' '--- Root authorization and clean-host preflight ---'
 sudo -v || fail 'sudo authorization failed.'
@@ -241,7 +241,7 @@ printf 'PASS    Production helper is deliberately absent before the AppImage ins
 
 setsid env -u APPIMAGE_EXTRACT_AND_RUN "$APPIMAGE" &
 APP_PID=$!
-printf 'ACTION  In the 0.6.0 AppImage, enable the Kill Switch if it is not already enabled.\n'
+printf 'ACTION  In the %s AppImage, enable the Kill Switch if it is not already enabled.\n' "$VERSION"
 printf "ACTION  Confirm 'Kill-Switch-Systemkomponente installieren?' and authorize the administrator prompt.\n"
 printf 'ACTION  Do NOT connect the VPN. The test continues automatically after the exact helper is installed.\n'
 for _ in $(seq 1 1800); do
@@ -308,7 +308,7 @@ restore_setting
 ORIGINAL_KS=""
 cancel_reset
 printf 'PASS    Original Kill Switch preference restored and safety-reset timer cancelled.\n'
-printf '\nALL STAGE-8B.2 REAL 0.6.0 APPIMAGE HELPER HOST TESTS PASSED\n'
+printf '\nALL STAGE-8B.2 REAL %s APPIMAGE HELPER HOST TESTS PASSED\n' "$VERSION"
 printf 'Release candidate: %s\n' "$APPIMAGE"
 printf 'Checksum: %s\n' "$CHECKSUM"
 printf 'Report: %s\n' "$REPORT"

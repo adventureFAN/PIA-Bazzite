@@ -4,7 +4,8 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 REPORT_DIR="$ROOT/test-results/release/stage8"
 REPORT="$REPORT_DIR/pia-bazzite-stage8c2-packaging-host-test.txt"
-APP="$ROOT/dist/PIA-Bazzite-0.6.0-x86_64.AppImage"
+VERSION="$(PYTHONPATH="$ROOT" python3 -c 'from pia_bazzite import __version__; print(__version__)')"
+APP="$ROOT/dist/PIA-Bazzite-${VERSION}-x86_64.AppImage"
 SIDE="$APP.sha256"
 mkdir -p "$REPORT_DIR"
 exec > >(tee "$REPORT") 2>&1
@@ -21,7 +22,7 @@ PIA_BAZZITE_BUILD_MODE=development bash "$ROOT/packaging/build-appimage-podman.s
   cd "$ROOT/dist"
   sha256sum --check "$(basename "$SIDE")"
 )
-echo 'PASS    Fresh 0.6.0 AppImage and portable SHA-256 sidecar verify.'
+printf 'PASS    Fresh %s AppImage and portable SHA-256 sidecar verify.\n' "$VERSION"
 
 echo
 echo '--- Extract and inspect provenance, metadata, notices, and runtime licenses ---'
@@ -37,7 +38,7 @@ EXTRACTED="$TMP/squashfs-root"
 DOC="$EXTRACTED/usr/share/doc/pia-bazzite"
 META="$EXTRACTED/usr/share/metainfo"
 [[ -f "$DOC/BUILD_INFO.txt" ]] || { echo 'ERROR: BUILD_INFO.txt missing.' >&2; exit 1; }
-grep -Fx 'PIA Bazzite version: 0.6.0' "$DOC/BUILD_INFO.txt" >/dev/null
+grep -Fx "PIA Bazzite version: $VERSION" "$DOC/BUILD_INFO.txt" >/dev/null
 grep -Fx 'Build mode: development' "$DOC/BUILD_INFO.txt" >/dev/null
 grep -Fx 'Source commit: working-tree' "$DOC/BUILD_INFO.txt" >/dev/null
 cmp -s \
@@ -95,8 +96,8 @@ echo "PASS    AppImage provenance, AppStream aliases, notices, component invento
 
 echo
 echo '--- Smoke-test runtime version without a privileged helper action ---'
-APPIMAGE_EXTRACT_AND_RUN=1 "$APP" --version | grep -F '0.6.0' >/dev/null
-echo 'PASS    Extract-and-run version smoke test reports 0.6.0.'
+APPIMAGE_EXTRACT_AND_RUN=1 "$APP" --version | grep -F "$VERSION" >/dev/null
+printf 'PASS    Extract-and-run version smoke test reports %s.\n' "$VERSION"
 
 echo
 echo 'ALL STAGE-8C.2 PACKAGING/RELEASE HYGIENE HOST TESTS PASSED'

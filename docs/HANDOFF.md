@@ -3,7 +3,7 @@
 **Purpose:** Continuity document for future ChatGPT conversations and later PIA Bazzite development.
 **Last updated:** 2026-08-13
 **Current public stable release:** **PIA Bazzite 0.6.0**
-**Current development baseline:** **0.7.0 development — Stage 1 verified; Stage 2 server favorites fully verified; Stage 3A–3D verified; Stage 4A–4C Auto-Connect/login-autostart verified and frozen; Stage 5A physical-network state detection verified and frozen; Stage 6A UI/search/filter host-tested; Stage 6B tabbed Options/behavior polish candidate**
+**Current development baseline:** **0.7.0 release candidate — Stage 1–6 verified/frozen; Stage 7A–7H release regression passed on real Bazzite; Stage 7I release metadata/AppImage packaging is the remaining release step**
 **Stable release tag:** `v0.6.0`
 **Stable release commit:** `4df051f` (`feat: prepare PIA Bazzite 0.6.0 release`)
 **Repository:** https://github.com/adventureFAN/PIA-Bazzite
@@ -296,7 +296,7 @@ Packaging/release:
 - `.github/workflows/ci.yml` - public CI gate.
 - `.github/workflows/release.yml` - tag-driven release build/publish workflow.
 - `tools/release-unprivileged-gate.sh` - common release gate.
-- `tools/release-stage8c2-self-test.sh` - authoritative accumulated unprivileged regression gate for the 0.6.0 architecture.
+- `tools/release-stage8c2-self-test.sh` - authoritative accumulated unprivileged regression gate for the current architecture.
 - `tools/release-stage8c2-packaging-host-test.sh` - real packaging/release-hygiene host gate.
 
 Documentation/evidence:
@@ -306,6 +306,7 @@ Documentation/evidence:
 - `TESTING.md`
 - `CHANGELOG.md`
 - `RELEASE_NOTES_0.6.0.md`
+- `RELEASE_NOTES_0.7.0.md`
 - `THIRD_PARTY_NOTICES.md`
 - `docs/HANDOFF.md`
 - `docs/kill-switch/` - detailed staged Kill Switch design/test history.
@@ -321,8 +322,8 @@ Do not casually revert these:
 - Closing the window with tray enabled hides to tray; it does not silently tear down VPN/firewall state.
 - With tray disabled, closing the window follows the configured real exit policy. Leaving the VPN connected is refused when doing so would abandon an active Kill Switch protection state.
 - The Session Kill Switch preference remains enabled after a successful reset; the next protected connection should use it again.
-- Public IP/country lookup uses `api.country.is`. While verified disconnected, it is **not queried automatically**; the user can explicitly request it. Automatic lookups are limited to verified VPN-connected states.
-- Offline startup may fail to load the PIA server list. In 0.6.0 there is deliberately no new automatic network-state watcher solely to reload it when Wi-Fi returns; **Refresh server list** is the accepted recovery path.
+- Public IP/country lookup uses the user-selected maintained provider: GeoJS (default), FreeIPAPI, or ipwho.is. While verified disconnected, it is **not queried automatically**; the user can explicitly request it. Disabling the public IP/location display suppresses those provider lookups.
+- Offline startup may fail to load the initial PIA server list. Stage 5A now detects physical-network loss/return for accurate UI reconciliation, but 0.7.0 deliberately does **not** add delayed Auto-Connect or automatic server-list reload solely because Wi-Fi/Ethernet returned; **Refresh server list** remains the explicit recovery action for an initial offline fetch failure.
 - Live Log uses compact timestamps and meaningful `OK`, `INFO`, `WARNING`, `ERROR` events; do not add noisy per-poll spam. Secrets must be redacted and public IP display/logging uses masking where designed.
 - Long explanatory tooltips should be deliberately wrapped rather than rendered as monitor-wide single lines.
 - Public GitHub docs are English-only; runtime UI is DE/EN.
@@ -337,9 +338,9 @@ These are important user expectations, not hidden defects:
 - The Session Kill Switch is **not persistent across reboot/kernel crash/power loss**.
 - PIA Bazzite is not an early-boot firewall.
 - KDE/NetworkManager may show `Limited connectivity` while the full Kill Switch intentionally blocks direct connectivity probes.
-- Complete physical-network loss can leave the WireGuard profile administratively active/Green even while no public traffic is possible; the verified firewall still blocks fallback.
+- NetworkManager can keep the WireGuard profile administratively active during complete physical-network loss. Stage 5A therefore overlays physical-underlay state so the UI presents Orange with verified Session Kill Switch protection or neutral Grey in normal VPN mode instead of stale Green/Blue.
 - Normal VPN mode blocks native IPv6 rather than tunneling it because the PIA parameters used by this client do not provide a tunneled IPv6 route.
-- 0.6.0 does not provide split tunneling, port forwarding, trusted-network rules or automatic connection at login.
+- 0.7.0 still does not provide split tunneling, port forwarding, trusted-network rules, or boot-persistent/early-boot Kill Switch protection.
 - Support is intentionally focused on Bazzite; do not silently broaden support guarantees to arbitrary distributions without testing.
 
 ---
@@ -559,7 +560,7 @@ Current candidate roadmap, not promises:
 - Real Bazzite Wi-Fi loss/recovery passed in both runtime modes on 2026-08-13. With Session Kill Switch enabled, loss of the physical Wi-Fi path changed the UI from verified Green to Orange/network-unavailable, logged that the verified Kill Switch remained active, and returned to Green after NetworkManager restored the underlay without a redundant reconnect. With Session Kill Switch disabled, ordinary Blue VPN mode changed to neutral Grey/network-unavailable rather than falsely remaining Blue, then returned to Blue after restoration; the separate IPv6-only guard remained part of normal VPN protection. Public network information was refreshed again after the physical path returned. Stage 5A is therefore **verified and frozen**.
 
 
-**Stage 6A candidate — KDE-aligned UI/search/filter polish (2026-08-13):**
+**Stage 6A verified — KDE-aligned UI/search/filter polish (2026-08-13):**
 
 - This is a presentation-only 0.7 polish stage; it must not change VPN, Kill-Switch, IPv6-guard, Auto-Connect, recovery, favorites persistence, or NetworkManager safety behavior.
 - German `Tools` is renamed from `Funktionen` to the conventional desktop label `Extras`; English remains `Tools`.
@@ -569,9 +570,9 @@ Current candidate roadmap, not promises:
 - Text search now indexes the hidden meanings of the compact markers in both DE and EN and matches all whitespace-separated tokens, so searches such as `virtuell monaco`, `virtual monaco`, `streaming belgien`, or `normal frankfurt` work even though the list itself stays compact.
 - Small action/mode icons are normalized toward KDE symbolic/monochrome semantics: Fastest is neutral in Main, Options, and tray; Auto-Connect `Off` uses a neutral custom stop icon rather than Plasma's commonly red semantic stop icon; tray Quit deliberately uses a neutral vector icon. **Gold remains reserved for actual favorite status on a concrete server row.**
 - Inactive favorite stars in the main server list are rendered from one stable theme-derived neutral gray and explicitly provide the same QIcon pixmap for Normal/Active/Selected modes, preventing Qt selection state from changing every empty star between dark and light gray.
-- Focused coverage is `tests/ui/test_stage6a_ui_polish_07.py`; `tools/0.7-stage6a-ui-polish-self-test.sh` reruns the relevant Stage 2B/2C/3A/3D/4A/4B/4C/5A UI regressions. Candidate gate: **75/75 PASS**, `self_test.py` PASS, and the authoritative unprivileged release gate PASS. Real Bazzite review then confirmed the **690 px compact Main width**, Live-Log expansion behavior, `Extras`, integrated type filter, multi-token search, and the KDE-aligned neutral action-icon direction. The only requested correction was restoring the one-line Streaming marker legend, which is folded into Stage 6B; freeze Stage 6A together with the integrated Stage 6B host pass rather than creating a separate cosmetic checkpoint.
+- Focused coverage is `tests/ui/test_stage6a_ui_polish_07.py`; `tools/0.7-stage6a-ui-polish-self-test.sh` reruns the relevant Stage 2B/2C/3A/3D/4A/4B/4C/5A UI regressions. Focused gate: **75/75 PASS**, `self_test.py` PASS, and the authoritative unprivileged release gate PASS. Real Bazzite review confirmed the **690 px compact Main width**, Live-Log expansion behavior, `Extras`, integrated type filter, multi-token search, and the KDE-aligned neutral action-icon direction. The one requested Streaming-marker legend correction was folded into Stage 6B, and the integrated Stage 6 host pass froze both stages.
 
-**Stage 6B candidate — tabbed Options + meaningful preferences (2026-08-13):**
+**Stage 6B verified — tabbed Options + meaningful preferences (2026-08-13):**
 
 - The fixed-size Options dialog is reorganized into three KDE-style tabs: **General / Allgemein**, **Connection / Verbindung**, and **Network & Privacy / Netzwerk & Datenschutz**. The established fixed-width selector grid and Save/Cancel transaction boundary remain intact; Session Kill Switch, credential re-entry, and Live Log stay direct `Tools / Extras` actions rather than being buried in Options.
 - Three user-facing preferences are added with defaults that preserve existing behavior: **security/error notifications ON**, **confirm server switch ON**, and **show public IP/location ON**. These are ordinary `QSettings` preferences and require no privilege.
@@ -582,9 +583,9 @@ Current candidate roadmap, not promises:
 - The Streaming marker QuickInfo is restored as exactly one legend line: `▶ Streaming-optimized location / Streaming-optimierter Standort`. The Virtual marker keeps its two-line explanation because the physical-location distinction is not obvious.
 - KDE follow-up polish removes the redundant group title repeated inside each tab; the tab itself is the section heading. A first attempt to keep the old fixed-width `QFormLayout` grid while spanning checkbox rows looked correct in static tests but wrapped the 230 px label + 250 px selector pair on real Plasma/Breeze, causing labels and selectors to overlap badly in the 560 px fixed dialog. The host-reviewed fix replaces those tab forms with a two-column `QGridLayout`: the label column stretches naturally, every 250 px selector is right-aligned in one shared second column, and standalone checkbox rows span both columns. This preserves the fixed dialog size and cross-tab selector alignment without forcing translated labels into a wrapping form layout. The third tab intentionally stores `Netzwerk && Datenschutz` / `Network && Privacy` so Qt renders the requested literal `&` instead of treating it as a mnemonic marker.
 - Tray hover copy now uses `PIA Bazzite: <status>` on the first line instead of an em dash. A requested KDE-native large-title/smaller-detail split was investigated but is **not implemented in the current `QSystemTrayIcon` backend**: Qt exposes only a single tooltip string and its Linux StatusNotifierItem adaptor maps that whole string to the SNI tooltip **title**, leaving the structured subtitle empty. Do not add HTML/CSS hacks or replace the otherwise verified tray backend solely for typography; the second plain-text line remains the portable fallback unless a future tray architecture provides a real title/subtitle API.
-- Focused coverage is `tests/ui/test_stage6b_options_redesign_07.py` plus `tests/ui/test_stage6b_kde_polish_07.py`; `tools/0.7-stage6b-options-redesign-self-test.sh` reruns Stage 6A plus the relevant Options/provider/Auto-Connect/marker/favorites/autostart/network-state regressions. Current local focused gate after the real-Plasma layout correction: **95/95 PASS**, `self_test.py` PASS, and the authoritative unprivileged release gate PASS. Real Bazzite visual and interaction testing is required before Stage 6B (and the integrated Stage 6A polish) are frozen.
+- Focused coverage is `tests/ui/test_stage6b_options_redesign_07.py` plus `tests/ui/test_stage6b_kde_polish_07.py`; `tools/0.7-stage6b-options-redesign-self-test.sh` reruns Stage 6A plus the relevant Options/provider/Auto-Connect/marker/favorites/autostart/network-state regressions. Final focused gate after the real-Plasma layout correction: **95/95 PASS**, `self_test.py` PASS, and the authoritative unprivileged release gate PASS. Real Bazzite visual and interaction testing passed; Stage 6A/6B are verified and frozen.
 
-- **0.7.x current sequence:** Stage 3A Options-window foundation, Stage 3B provider-core/real-location comparison, Stage 3C selectable online providers, Stage 3D compact server-marker/tray polish, and Stage 4A Auto-Connect preference foundation are complete and verified. GeoJS is the verified 0.7 default after the Nigeria virtual-location discriminator, with FreeIPAPI and ipwho.is available as maintained user-selectable alternatives. The local IPinfo Lite/Automatic design was consciously rejected as disproportionate complexity for this feature. **Stage 4B Auto-Connect startup execution, Stage 4C login-autostart/tray behavior, and Stage 5A physical-network state detection are verified and frozen. Stage 5B is consciously omitted; Stage 6A has passed its real Main/search/filter review and Stage 6B is the current integrated Options/behavior polish candidate.** Server Favorites are complete and verified.
+- **0.7.x current sequence:** server favorites, selectable public-network providers, compact location markers, Auto-Connect, login autostart, physical-network state detection, searchable/filterable locations, and the KDE-aligned tabbed Options/UI polish are complete and verified. GeoJS is the verified 0.7 default, with FreeIPAPI and ipwho.is as maintained alternatives. The local IPinfo Lite/Automatic design was consciously rejected as disproportionate complexity. Stage 5B was consciously omitted because the existing audited reconnect/recovery path already behaved correctly once Stage 5A supplied the missing underlay-state awareness. **The real 0.7 release-regression matrix has passed through Stage 7H; Stage 7I packaging/final AppImage validation is the only remaining pre-tag block.**
 - **0.8.x candidates:** trusted networks and an optional, carefully tested local-LAN access exception for the Kill Switch.
 - **0.9.x candidate:** PIA port forwarding on supported regions.
 - **Later / high risk:** per-app split tunneling. Treat it as a routing/security project comparable in complexity to the Kill Switch, not a small checkbox.
@@ -1606,9 +1607,19 @@ Keep historical evidence when it explains why a current invariant exists, but al
 - This is a presentation-only hotfix. Auto-Connect target values, ordering, persistence, startup execution, VPN, Kill Switch, and NetworkManager behavior are unchanged.
 - Real Bazzite DE/EN + Light/Dark visual recheck passed after the palette-aware icon hotfix; Stage 7B.3 is PASS and frozen for the 0.7 release run.
 
-### Stage 7D.3 source/development login-autostart hotfix candidate (2026-08-13)
+### Stage 7D.3 source/development login-autostart hotfix verified (2026-08-13)
 - The 0.7 release regression found a development-mode-only autostart bug on real Bazzite: the generated XDG `Exec=` line contained `/usr/bin/python3.14` instead of the active project `.venv/bin/python`. KDE therefore did invoke the configured command, but the system interpreter failed immediately with `ModuleNotFoundError: No module named 'PySide6'`.
 - Root cause: `current_autostart_command()` called `Path(sys.executable).resolve()` in source/development mode. Because `.venv/bin/python` is a symlink, resolving it dereferenced the launcher to the system interpreter and lost the virtual environment's `site-packages`.
-- Candidate fix: preserve the source-mode `sys.executable` launcher path without symlink dereferencing while still resolving `main.py` to a stable absolute path. AppImage handling is unchanged and still uses the original `APPIMAGE` path; frozen non-AppImage behavior is unchanged.
+- Verified fix: preserve the source-mode `sys.executable` launcher path without symlink dereferencing while still resolving `main.py` to a stable absolute path. AppImage handling is unchanged and still uses the original `APPIMAGE` path; frozen non-AppImage behavior is unchanged.
 - Regression coverage `tests/ui/test_stage7d3_source_autostart_venv_07.py` explicitly creates a venv-style Python symlink and requires the generated autostart command to keep the symlink path rather than its system-Python target. `tools/0.7-stage7d3-source-autostart-hotfix-self-test.sh` reruns this together with Stage 4C autostart, Stage 4B startup, and Stage 7B.3 icon regressions.
-- Existing development autostart entries created before this fix remain stale until rewritten. For the release-run host test, toggle `PIA Bazzite bei der Anmeldung starten` OFF then ON once after applying the hotfix (or otherwise rewrite the owned XDG entry) and verify that `Exec=` now names `$PROJECT/.venv/bin/python`. Do not mark 7D.3 PASS until a real logout/login or reboot confirms the repaired entry starts PIA Bazzite.
+- Existing development autostart entries created before this fix remain stale until rewritten. The release-run host test rewrote the entry, verified `Exec=` names `$PROJECT/.venv/bin/python`, and a real logout/login confirmed PIA Bazzite starts correctly. Stage 7D.3 is PASS.
+### 0.7.0 release-regression status (2026-08-13)
+- **7A PASS:** clean Git checkpoint, Stage 6B focused self-test, and authoritative unprivileged release gate.
+- **7B PASS:** 100% UI/tray/options, DE/EN, Light/Dark. A real Light-mode contrast issue in Auto-Connect special-mode icons was found, fixed with palette-aware rendering, and reverified.
+- **7C PASS:** normal connect/disconnect, server-switch confirmation on/off, favorite/fastest/normal/filtered selection, public-provider switching, and public IP/location display toggle.
+- **7D PASS:** Auto-Connect Off/A13 regression, real Auto-Connect, login autostart with tray and visible-Main fallback without tray. A source-mode `.venv/bin/python` autostart bug was found, fixed, and reverified; AppImage autostart was not affected by that bug.
+- **7E PASS:** physical-network loss/recovery Green→Orange→Green with Session Kill Switch and Blue→Grey→Blue in normal mode.
+- **7F PASS:** protected connect, external `nmcli connection down "PIA Bazzite"` fail-closed recovery, and intentional protected disconnect.
+- **7G PASS:** Plasma 125% and 150% scaling remain fully usable on a 2560×1080 display, including Main + Live Log and the tabbed Options dialog.
+- **7H PASS:** fresh-start defaults and first-run behavior were validated without mutating the real user profile. A fully isolated `XDG_CONFIG_HOME` was found unsuitable for testing the `System` theme because it also hides KDE's theme configuration; an app-only fresh-profile check correctly followed the real Plasma Dark setting. Existing settings were continuously exercised throughout 0.7 development.
+- **7I current:** release metadata/version/release notes and current-version packaging gates are being prepared for 0.7.0. Public stable remains 0.6.0 until the final AppImage is validated, the release commit is pushed, CI is green, and tag `v0.7.0` is created on that exact commit.

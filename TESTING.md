@@ -1,27 +1,32 @@
-# PIA Bazzite 0.6.0 release test checklist
+# PIA Bazzite 0.7.0 release test checklist
 
 The static self-test does not contact PIA and does not change NetworkManager.
 
-1. Run `./self_test.py`; all checks must pass.
-2. Start from source and confirm `./run.sh --version` is not required for GUI use.
-3. Confirm the window title is only `PIA Bazzite`.
-4. Confirm the green PIA shield is the application/window icon.
-5. Confirm English is the default and German can be selected.
-6. Test System, Light, and Dark appearance.
-7. Confirm the compact and live-log window sizes are locked as designed.
-8. Connect from the main window and verify public IP, country, DNS, and IPv6 status.
-9. Confirm the tray icon is red while disconnected and green while connected.
-10. Left-click the tray icon; the existing main window must be shown.
-11. Right-click the tray icon; the native menu must remain open normally.
-12. Use the tray to disconnect, reconnect, and switch locations.
-13. Test fastest location and the ten quick locations.
-14. Confirm the disabled tray status row contains one colored dot only.
-15. Test all documented keyboard shortcuts.
-16. Test the live log copy, clear, and save actions.
-17. Confirm a second application start raises the existing instance.
-18. On Bazzite, build with `./packaging/build-appimage-podman.sh`.
-19. Run `APPIMAGE_EXTRACT_AND_RUN=1 ./PIA-Bazzite-0.6.0-x86_64.AppImage --version`.
-20. Integrate the AppImage with Gear Lever and repeat the connection tests.
+1. Run `bash tools/release-unprivileged-gate.sh`; all authoritative unprivileged gates must pass.
+2. Start from source and confirm the window title is only `PIA Bazzite`.
+3. Confirm DE/EN and System/Light/Dark presentation, including 125% and 150% Plasma scaling.
+4. Confirm the compact Main and larger Live-Log window sizes remain fully usable.
+5. Confirm location search and the All/Normal/Virtual/Streaming filters combine correctly.
+6. Confirm persistent favorites, neutral non-favorite stars, compact virtual/streaming markers, and tray favorites.
+7. Confirm the tabbed Options dialog, Save/Cancel behavior, and persisted settings.
+8. Connect/disconnect in normal VPN mode; verify Blue connected state, public IP/country, DNS, and IPv6-only guard.
+9. Enable Session Kill Switch; verify firewall-first protected connect reaches Green.
+10. Force the NetworkManager VPN profile down; verify fail-closed protected recovery returns to Green.
+11. Intentionally disconnect with Session Kill Switch enabled; verify VPN-down before firewall release and normal network restoration.
+12. Remove and restore the physical Wi-Fi/Ethernet path; verify Green→Orange→Green with Session Kill Switch and Blue→Grey→Blue without it.
+13. Test server switching with confirmation enabled and disabled.
+14. Test fastest, favorite, fixed normal, virtual, and streaming-filtered location selection.
+15. Test public-network provider switching (GeoJS, FreeIPAPI, ipwho.is) and disabling the public IP/location display.
+16. Test Auto-Connect Off, Last selected, Fastest/fixed target, and existing-VPN adoption.
+17. Test login autostart with tray enabled (tray-first) and tray disabled (Main visible).
+18. Confirm closing Main to tray does not emit the old repetitive minimize notification.
+19. Confirm a second application start raises the existing instance instead of creating a competing controller.
+20. Test the live-log copy, clear, and save actions; inspect shared logs for secrets before posting.
+21. On Bazzite, build the release candidate with `PIA_BAZZITE_BUILD_MODE=release ./packaging/build-appimage-podman.sh` from a clean committed tree.
+22. Run `APPIMAGE_EXTRACT_AND_RUN=1 ./dist/PIA-Bazzite-0.7.0-x86_64.AppImage --version`.
+23. Verify the SHA-256 sidecar and run `bash tools/release-stage8c2-packaging-host-test.sh`.
+24. Run the real packaged-helper install/current/outdated host gate when helper packaging changed or before a major release freeze.
+25. Integrate the final AppImage with Gear Lever and repeat the release smoke subset from the packaged artifact.
 
 ## Stage 8B: packaged AppImage helper install/upgrade gate
 
@@ -41,7 +46,7 @@ never make an older helper current. See
 The real AppImage host gate remains separate and is run only after this self-test passes.
 
 
-## Stage 8A: 0.6.0 release and AppImage packaging audit
+## Stage 8A: 0.7.0 release and AppImage packaging audit
 
 Run:
 
@@ -49,7 +54,7 @@ Run:
 bash tools/release-stage8a-self-test.sh
 ```
 
-This gate is unprivileged and network-free. It verifies that the 0.6.0 version is
+This gate is unprivileged and network-free. It verifies that the 0.7.0 version is
 consistent across runtime, desktop/AppStream metadata, release notes, workflows, and
 the AppImage builder. It also builds the fixed Kill Switch helper payload into a
 temporary directory and checks its manifest and hashes. The AppImage now carries the
@@ -339,7 +344,7 @@ in `sys.modules`. Stage 7D.1 fixes that Python 3.14 compatibility issue and perm
 smoke-tests the complete Stage-7D import path. This regression belongs to the test
 harness; production VPN/firewall behavior was not exercised by the failed run.
 
-### Stage 8B.2 — real 0.6.0 AppImage helper host gate
+### Stage 8B.2 — real 0.7.0 AppImage helper host gate
 
 Run the unprivileged gate first:
 

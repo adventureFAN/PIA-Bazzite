@@ -9,6 +9,7 @@ import tempfile
 import unittest
 from unittest import mock
 
+from pia_bazzite import __version__
 from pia_bazzite.helper_installation import (
     BUNDLE_ENVIRONMENT_KEY,
     BUNDLE_SOURCE_MODES,
@@ -40,7 +41,7 @@ def load_bundle_builder():
 
 def make_bundle(destination: Path) -> Path:
     builder = load_bundle_builder()
-    builder.build_bundle(root=ROOT, destination=destination, version="0.6.0")
+    builder.build_bundle(root=ROOT, destination=destination, version=__version__)
     return destination
 
 
@@ -213,7 +214,7 @@ class Stage8BInstallFlowTests(unittest.TestCase):
             staged_bundle = Path(argv[-3])
             self.assertFalse(staged_bundle.exists())
             self.assertRegex(argv[-2], r"^[0-9a-f]{64}$")
-            self.assertEqual(argv[-1], "0.6.0")
+            self.assertEqual(argv[-1], __version__)
             self.assertEqual(environment["PATH"], "/usr/sbin:/usr/bin:/sbin:/bin")
             self.assertNotIn(BUNDLE_ENVIRONMENT_KEY, environment)
             self.assertNotIn("LD_PRELOAD", environment)

@@ -6,6 +6,8 @@ import tempfile
 import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
+CURRENT_VERSION = "0.7.0"
+CURRENT_RELEASE_DATE = "2026-08-13"
 
 
 def _load_collector():
@@ -31,16 +33,16 @@ class _FakeDistribution:
 
 class Stage8C2PackagingHygieneTests(unittest.TestCase):
     def test_stage8d_release_metadata_and_action_pins_are_frozen(self):
-        release_date = "2026-08-08"
+        release_date = CURRENT_RELEASE_DATE
         changelog = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
-        self.assertIn(f"## [0.6.0] - {release_date}", changelog)
+        self.assertIn(f"## [{CURRENT_VERSION}] - {release_date}", changelog)
 
         import xml.etree.ElementTree as ET
         tree = ET.parse(ROOT / "packaging/io.github.adventurefan.PIABazzite.metainfo.xml")
         releases = tree.getroot().find("releases")
         self.assertIsNotNone(releases)
         active = list(releases)[0]
-        self.assertEqual(active.attrib.get("version"), "0.6.0")
+        self.assertEqual(active.attrib.get("version"), CURRENT_VERSION)
         self.assertEqual(active.attrib.get("date"), release_date)
 
         expected_pins = {
@@ -187,7 +189,7 @@ class Stage8C2PackagingHygieneTests(unittest.TestCase):
 
     def test_public_docs_describe_generated_license_inventory_and_no_stage8_release_copy(self):
         notices = (ROOT / "THIRD_PARTY_NOTICES.md").read_text(encoding="utf-8")
-        notes = (ROOT / "RELEASE_NOTES_0.6.0.md").read_text(encoding="utf-8")
+        notes = (ROOT / f"RELEASE_NOTES_{CURRENT_VERSION}.md").read_text(encoding="utf-8")
         self.assertIn("third-party-python/COMPONENTS.txt", notices)
         self.assertIn("Qt/PySide6", notices)
         self.assertNotIn("Stage 8 validates", notes)

@@ -4,11 +4,12 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 REPORT_DIR="$ROOT/test-results/release/stage8"
 REPORT="$REPORT_DIR/pia-bazzite-stage8a-release-packaging-self-test.txt"
+VERSION="$(PYTHONPATH="$ROOT" python3 -c 'from pia_bazzite import __version__; print(__version__)')"
 mkdir -p "$REPORT_DIR"
 
 exec > >(tee "$REPORT") 2>&1
 
-printf 'PIA Bazzite Stage-8A 0.6.0 release/AppImage packaging audit self-test\n'
+printf 'PIA Bazzite Stage-8A %s release/AppImage packaging audit self-test\n' "$VERSION"
 printf 'This test does not use sudo, pkexec, networking, NetworkManager, nftables, or the GUI.\n\n'
 
 printf '%s\n' '--- Stage-8A release and helper-bundle tests ---'
