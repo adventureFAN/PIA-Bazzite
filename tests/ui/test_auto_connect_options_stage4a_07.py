@@ -49,15 +49,24 @@ class Stage4AAutoConnectOptionsTests(unittest.TestCase):
         self.assertNotIn("connect_region", block)
         self.assertNotIn("toggle_connection", block)
 
-    def test_options_are_one_compact_selector_with_off_last_favorites_fastest_and_regions(self) -> None:
+    def test_options_are_one_compact_selector_with_special_modes_favorites_and_regions(self) -> None:
         self.assertIn("self.auto_connect_combo = AutoConnectComboBox()", self.options)
         self.assertIn('tr("options.auto_connect.off")', self.options)
         self.assertIn('tr("options.auto_connect.last")', self.options)
-        self.assertIn('tr("options.auto_connect.favorites")', self.options)
         self.assertIn("AUTO_CONNECT_FASTEST", self.options)
         self.assertIn("available_favorites.sort(key=self._region_ping_sort_key)", self.options)
         self.assertIn("normal_regions.sort(key=self._region_ping_sort_key)", self.options)
         self.assertIn("compact_region_display_name(region, language())", self.options)
+        self.assertNotIn('tr("options.auto_connect.favorites")', self.options)
+
+        start = self.options.index("    def _populate_auto_connect_combo")
+        end = self.options.index("    def _auto_connect_marker_icon", start)
+        block = self.options[start:end]
+        fastest = block.index('tr("connection.fastest")')
+        favorites = block.index("for region in available_favorites:")
+        normal = block.index("for region in normal_regions:")
+        self.assertLess(fastest, favorites)
+        self.assertLess(favorites, normal)
 
     def test_auto_connect_popup_is_bounded_and_scrollable(self) -> None:
         self.assertIn("AUTO_CONNECT_POPUP_VISIBLE_ITEMS = 20", self.options)
@@ -65,9 +74,16 @@ class Stage4AAutoConnectOptionsTests(unittest.TestCase):
         self.assertIn("def _limit_popup_height", self.options)
         self.assertIn("view.setMaximumHeight(height)", self.options)
         self.assertIn("popup.setMaximumHeight(height)", self.options)
+        self.assertIn("self.view().scrollToTop()", self.options)
 
-    def test_favorite_and_fastest_entries_use_gold_icons(self) -> None:
+    def test_special_modes_and_favorite_fastest_entries_have_consistent_icons(self) -> None:
         self.assertIn('AUTO_CONNECT_ACCENT_COLOR = "#f4c542"', self.options)
+        self.assertIn('self._auto_connect_mode_icon("off")', self.options)
+        self.assertIn('self._auto_connect_mode_icon("last")', self.options)
+        self.assertIn('"off": ("process-stop", "dialog-cancel")', self.options)
+        self.assertIn('"last": ("view-refresh", "view-history", "edit-redo")', self.options)
+        self.assertIn("QIcon.fromTheme(name)", self.options)
+        self.assertIn("QPalette.ColorRole.Text", self.options)
         self.assertIn('self._auto_connect_marker_icon("★")', self.options)
         self.assertIn('self._auto_connect_marker_icon("⚡")', self.options)
         self.assertIn("QPainterPath()", self.options)
@@ -101,13 +117,14 @@ class Stage4AAutoConnectOptionsTests(unittest.TestCase):
             "options.auto_connect_tooltip",
             "options.auto_connect.off",
             "options.auto_connect.last",
-            "options.auto_connect.favorites",
             "options.auto_connect.unavailable",
         ):
             self.assertIn(key, self.de)
             self.assertIn(key, self.en)
         self.assertEqual(self.de["options.auto_connect"], "Automatisch verbinden:")
         self.assertEqual(self.en["options.auto_connect"], "Connect automatically:")
+        self.assertNotIn("options.auto_connect.favorites", self.de)
+        self.assertNotIn("options.auto_connect.favorites", self.en)
         self.assertEqual(set(self.de), set(self.en))
 
 

@@ -44,26 +44,27 @@ class SingleInstance(QObject):
         self._server = QLocalServer(self)
         self._server.newConnection.connect(self._accept_connections)
 
-    def _activate_existing(self) -> bool:
+    def _activate_existing(self, *, request_activation: bool = True) -> bool:
         probe = QLocalSocket()
         probe.connectToServer(self._name)
         if not probe.waitForConnected(250):
             return False
-        probe.write(b"activate")
-        probe.flush()
-        probe.waitForBytesWritten(250)
+        if request_activation:
+            probe.write(b"activate")
+            probe.flush()
+            probe.waitForBytesWritten(250)
         probe.disconnectFromServer()
         return True
 
-    def claim(self) -> bool:
+    def claim(self, *, activate_existing: bool = True) -> bool:
         # The lock serializes stale-socket cleanup.  Without it, two processes
         # starting together can both observe no listener and one can remove the
         # other's just-created QLocalServer socket.
         if not self._lock.tryLock(0):
-            self._activate_existing()
+            self._activate_existing(request_activation=activate_existing)
             return False
 
-        if self._activate_existing():
+        if self._activate_existing(request_activation=activate_existing):
             self._lock.unlock()
             return False
 

@@ -6,9 +6,10 @@ from PySide6.QtCore import QCoreApplication
 from PySide6.QtWidgets import QApplication
 
 from pia_bazzite import __app_id__, __version__
+from pia_bazzite.autostart import AUTOSTART_ARGUMENT
 from pia_bazzite.gui import MainWindow
 from pia_bazzite.i18n import set_language
-from pia_bazzite.settings import create_settings
+from pia_bazzite.settings import bool_value, create_settings
 from pia_bazzite.single_instance import SingleInstance
 from pia_bazzite.theme import ThemeController
 
@@ -23,7 +24,10 @@ def main() -> int:
     QCoreApplication.setApplicationName("PIA Bazzite")
     QCoreApplication.setApplicationVersion(__version__)
 
-    app = QApplication(sys.argv)
+    autostart_launch = AUTOSTART_ARGUMENT in sys.argv[1:]
+    qt_argv = [arg for arg in sys.argv if arg != AUTOSTART_ARGUMENT]
+
+    app = QApplication(qt_argv)
     app.setApplicationDisplayName("PIA Bazzite")
     app.setQuitOnLastWindowClosed(False)
     if hasattr(app, "setDesktopFileName"):
@@ -33,7 +37,7 @@ def main() -> int:
     set_language(str(settings.value("ui/language", "en")))
 
     instance = SingleInstance(__app_id__)
-    if not instance.claim():
+    if not instance.claim(activate_existing=not autostart_launch):
         return 0
 
     theme_controller = ThemeController(app)
@@ -41,7 +45,12 @@ def main() -> int:
 
     window = MainWindow(app, settings, theme_controller)
     instance.activate_requested.connect(window.show_window)
-    window.show()
+    # A login-autostart launch stays unobtrusive when the tray is actually
+    # enabled.  If the tray setting was disabled (or MainWindow had to disable
+    # it because the desktop exposes no system tray), keep the app reachable by
+    # showing the main window.  Manual launches always show the window.
+    if not autostart_launch or not bool_value(settings, "ui/tray_enabled", True):
+        window.show()
 
     # The local reference remains alive while the event loop is running.
     return app.exec()

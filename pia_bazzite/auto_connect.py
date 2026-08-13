@@ -46,3 +46,32 @@ def _clean_region_id(value: Any) -> str | None:
     if any(ord(character) < 32 or ord(character) == 127 for character in cleaned):
         return None
     return cleaned
+
+
+def resolve_auto_connect_region_id(
+    target: object,
+    *,
+    last_selected_region_id: str,
+    fastest_region_id: str | None,
+    fastest_selection_id: str,
+) -> str | None:
+    """Resolve an auto-connect preference to one concrete region identity.
+
+    The helper never invents a fallback for a missing fixed/last region.  Only
+    the explicit fastest choice (or a last selection that itself was the
+    fastest pseudo-entry) resolves dynamically.
+    """
+
+    normalized = normalize_auto_connect_target(target)
+    if normalized == AUTO_CONNECT_OFF:
+        return None
+    if normalized == AUTO_CONNECT_FASTEST:
+        return fastest_region_id
+    if normalized == AUTO_CONNECT_LAST:
+        selected = str(last_selected_region_id or "").strip()
+        if not selected:
+            return None
+        if selected == fastest_selection_id:
+            return fastest_region_id
+        return selected
+    return auto_connect_region_id(normalized)

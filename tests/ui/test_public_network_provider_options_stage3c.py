@@ -87,7 +87,7 @@ class Stage3CProviderOptionsTests(unittest.TestCase):
         )
         self.assertIn("OPTIONS_LABEL_COLUMN_WIDTH = 230", self.options)
         self.assertIn("OPTIONS_FIELD_WIDTH = 250", self.options)
-        self.assertIn("OPTIONS_DIALOG_HEIGHT = 410", self.options)
+        self.assertIn("OPTIONS_DIALOG_HEIGHT = 440", self.options)
 
     def test_saving_provider_is_persistent_and_refreshes_public_info(self) -> None:
         show_start = self.gui.index("    def show_options")

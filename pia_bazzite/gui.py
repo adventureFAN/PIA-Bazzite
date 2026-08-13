@@ -61,7 +61,7 @@ from .helper_installation import (
     HelperInstallationState,
     PackagedHelperManager,
 )
-from .icons import status_icon, system_status_icon
+from .icons import status_icon, system_status_icon, tray_menu_icon
 from .logging_utils import mask_ip_address, redact_secrets
 from .kill_switch_client import (
     AuthorizationDeniedError,
@@ -115,10 +115,12 @@ from .ipv6_guard_lifecycle import (
     IPv6GuardLifecycleError,
     IPv6GuardStartupError,
 )
+from .autostart import autostart_enabled, set_autostart_enabled
 from .auto_connect import (
     AUTO_CONNECT_KEY,
     AUTO_CONNECT_OFF,
     normalize_auto_connect_target,
+    resolve_auto_connect_region_id,
 )
 from .models import PublicNetworkInfo, Region, SystemCheck
 from .network_paths import discover_physical_interface
@@ -776,6 +778,14 @@ class MainWindow(QMainWindow):
         self._close_hint_shown = False
         self._initial_setup_done = False
         self._initial_region_refresh_pending = False
+        self._initial_region_refresh_started = False
+        self._initial_region_refresh_complete = False
+        self._initial_region_refresh_failed = False
+        self._startup_kill_switch_reconciliation_complete = False
+        self._startup_ipv6_guard_reconciliation_complete = False
+        self._startup_auto_connect_credentials_ready = False
+        self._startup_first_run_flow_complete = False
+        self._startup_auto_connect_attempted = False
 
         # An empty per-window title lets KDE/Qt show only applicationDisplayName.
         self.setWindowTitle("")
@@ -1308,11 +1318,11 @@ class MainWindow(QMainWindow):
         adoption.
         """
 
-        if (
-            self._stage4_preview
-            or self._connection_busy
-            or not self._startup_kill_switch_reconciliation_required()
-        ):
+        if self._stage4_preview or self._connection_busy:
+            return
+        if not self._startup_kill_switch_reconciliation_required():
+            self._startup_kill_switch_reconciliation_complete = True
+            self._maybe_startup_auto_connect()
             return
 
         if not _helper_checked:
@@ -1505,9 +1515,16 @@ class MainWindow(QMainWindow):
                     details=decision.reason,
                 )
 
+            if decision.adopted or decision.disposition in {
+                CrashRecoveryDisposition.NO_RECOVERY,
+                CrashRecoveryDisposition.CLEAR_STALE_RECORD,
+            }:
+                self._startup_kill_switch_reconciliation_complete = True
+
             self._update_controls()
             self.update_connection_status(force=True)
             self._release_initial_region_refresh_if_safe()
+            self._maybe_startup_auto_connect()
             if (
                 decision.adopted
                 and self._last_connected_state is True
@@ -1782,12 +1799,18 @@ class MainWindow(QMainWindow):
         self.update_connection_status(force=True)
 
     def _reconcile_ipv6_guard_startup(self, *, _helper_checked: bool = False) -> None:
-        if self._stage4_preview or self.kill_switch_runtime.feature_enabled:
+        if self._stage4_preview:
+            return
+        if self.kill_switch_runtime.feature_enabled:
+            self._startup_ipv6_guard_reconciliation_complete = True
+            self._maybe_startup_auto_connect()
             return
         if self._connection_busy:
             QTimer.singleShot(250, self._reconcile_ipv6_guard_startup)
             return
         if not self._startup_ipv6_guard_reconciliation_required():
+            self._startup_ipv6_guard_reconciliation_complete = True
+            self._maybe_startup_auto_connect()
             return
         if not _helper_checked:
             self._ensure_packaged_kill_switch_helper(
@@ -1863,8 +1886,10 @@ class MainWindow(QMainWindow):
                     )
                 else:
                     self.log("ok", "log.ipv6_guard.startup_clean")
+            self._startup_ipv6_guard_reconciliation_complete = True
             self._update_controls()
             self.update_connection_status(force=True)
+            self._maybe_startup_auto_connect()
 
         def failure(error: BaseException) -> None:
             self._connection_busy = False
@@ -2195,6 +2220,7 @@ class MainWindow(QMainWindow):
         current_tray_enabled = bool_value(
             self.settings, "ui/tray_enabled", True
         )
+        current_autostart_enabled = autostart_enabled()
         current_public_network_provider = normalize_online_public_network_provider(
             self.settings.value(
                 "network/public_info_provider",
@@ -2213,10 +2239,29 @@ class MainWindow(QMainWindow):
             self.change_quit_behavior(values.quit_behavior)
         if values.tray_enabled != current_tray_enabled:
             self._tray_setting_changed(values.tray_enabled)
+        if values.autostart_enabled != current_autostart_enabled:
+            self.change_autostart_enabled(values.autostart_enabled)
         if values.public_network_provider != current_public_network_provider:
             self.change_public_network_provider(values.public_network_provider)
         if values.auto_connect_target != current_auto_connect_target:
             self.change_auto_connect_target(values.auto_connect_target)
+
+    def change_autostart_enabled(self, enabled: bool) -> None:
+        try:
+            set_autostart_enabled(enabled)
+        except OSError as exc:
+            details = str(exc).strip() or exc.__class__.__name__
+            self.log("error", "log.autostart.failed", details=details)
+            QMessageBox.warning(
+                self,
+                tr("error.autostart.title"),
+                tr("error.autostart.message", details=details),
+            )
+            return
+        self.log(
+            "info",
+            "log.autostart.enabled" if enabled else "log.autostart.disabled",
+        )
 
     def change_auto_connect_target(self, target: str) -> None:
         normalized = normalize_auto_connect_target(target)
@@ -2805,6 +2850,7 @@ class MainWindow(QMainWindow):
         if self._startup_kill_switch_reconciliation_required():
             self._initial_region_refresh_pending = True
             return
+        self._initial_region_refresh_started = True
         QTimer.singleShot(0, self.refresh_regions)
 
     def _release_initial_region_refresh_if_safe(self) -> None:
@@ -2817,6 +2863,7 @@ class MainWindow(QMainWindow):
         if self._disconnected_kill_switch_may_block(connected=connected):
             return
         self._initial_region_refresh_pending = False
+        self._initial_region_refresh_started = True
         QTimer.singleShot(0, self.refresh_regions)
 
     def _first_start(self) -> None:
@@ -2838,12 +2885,19 @@ class MainWindow(QMainWindow):
                     tr("credentials.cancel_first_run_title"),
                     tr("credentials.cancel_first_run"),
                 )
+                self._startup_auto_connect_credentials_ready = False
+            else:
+                self._startup_auto_connect_credentials_ready = True
+        else:
+            self._startup_auto_connect_credentials_ready = True
 
         # The first server-list refresh starts only after the first-run modal
         # flow has finished *and* any crash-surviving full Kill Switch has been
         # reconciled. Qt timers keep running inside dialog.exec(), and a safely
         # blocked recovery state has no normal network path by design.
+        self._startup_first_run_flow_complete = True
         self._request_initial_region_refresh()
+        self._maybe_startup_auto_connect()
 
     def edit_credentials(self, *, first_run: bool) -> bool:
         username = self.credential_store.stored_username()
@@ -2879,6 +2933,104 @@ class MainWindow(QMainWindow):
         if self.edit_credentials(first_run=False):
             return self.session_credentials or self.credential_store.load()
         return None
+
+    def _startup_fastest_region(self) -> Region | None:
+        return next(
+            (region for region in self.regions if region.ping_ms is not None),
+            None,
+        )
+
+    def _resolve_startup_auto_connect_region(self, target: str) -> Region | None:
+        fastest = self._startup_fastest_region()
+        selected_id = str(
+            self.settings.value("connection/selected_region_id", FASTEST_ID)
+        ).strip() or FASTEST_ID
+        region_id = resolve_auto_connect_region_id(
+            target,
+            last_selected_region_id=selected_id,
+            fastest_region_id=(fastest.region_id if fastest is not None else None),
+            fastest_selection_id=FASTEST_ID,
+        )
+        if region_id is None:
+            return None
+        return self._region_by_id(region_id)
+
+    def _maybe_startup_auto_connect(self) -> None:
+        """Run the configured startup connection once, after safety gates settle."""
+
+        if self._startup_auto_connect_attempted or self._stage4_preview:
+            return
+
+        target = normalize_auto_connect_target(
+            self.settings.value(AUTO_CONNECT_KEY, AUTO_CONNECT_OFF)
+        )
+        if target == AUTO_CONNECT_OFF:
+            self._startup_auto_connect_attempted = True
+            return
+
+        if not self._initial_setup_done or not self._startup_first_run_flow_complete:
+            return
+        if not self._startup_auto_connect_credentials_ready:
+            # First-run credential cancellation is deliberate.  Do not reopen
+            # the same dialog automatically a moment later.
+            self._startup_auto_connect_attempted = True
+            self.log("warning", "log.auto_connect.credentials_missing")
+            return
+        if not self._initial_region_refresh_complete:
+            return
+        if self._initial_region_refresh_failed:
+            self._startup_auto_connect_attempted = True
+            self.log("warning", "log.auto_connect.regions_unavailable")
+            return
+        if not self._startup_kill_switch_reconciliation_complete:
+            return
+        if not self._startup_ipv6_guard_reconciliation_complete:
+            return
+        if self._connection_busy:
+            # Another deliberate startup/user operation won the race.  Auto-
+            # connect must never become a delayed surprise action.
+            self._startup_auto_connect_attempted = True
+            self.log("info", "log.auto_connect.skipped_busy")
+            return
+
+        try:
+            connected = network_manager.is_connected()
+        except Exception as exc:
+            self._startup_auto_connect_attempted = True
+            self.log(
+                "warning",
+                "log.auto_connect.state_unknown",
+                details=redact_secrets(f"{type(exc).__name__}: {exc}"),
+            )
+            return
+
+        if connected:
+            self._startup_auto_connect_attempted = True
+            self.log("info", "log.auto_connect.already_connected")
+            return
+
+        if self._disconnected_kill_switch_may_block(connected=False):
+            # A verified fail-closed recovery state has priority.  Its own
+            # protected reconnect path is the only safe continuation.  Skip
+            # auto-connect for this app start rather than turning a later reset
+            # into a surprise delayed connection.
+            self._startup_auto_connect_attempted = True
+            self.log("info", "log.auto_connect.recovery_priority")
+            return
+
+        region = self._resolve_startup_auto_connect_region(target)
+        if region is None:
+            self._startup_auto_connect_attempted = True
+            self.log("warning", "log.auto_connect.target_unavailable")
+            return
+
+        self._startup_auto_connect_attempted = True
+        self.log(
+            "info",
+            "log.auto_connect.starting",
+            region=localized_region_name(region, language()),
+        )
+        self.connect_region(region)
 
     # ------------------------------------------------------------------
     # Worker helpers and errors
@@ -3096,12 +3248,20 @@ class MainWindow(QMainWindow):
             self._update_controls()
             self.update_connection_status(force=True)
             self._rebuild_tray_menu()
+            if self._initial_region_refresh_started and not self._initial_region_refresh_complete:
+                self._initial_region_refresh_complete = True
+                self._initial_region_refresh_failed = False
+                self._maybe_startup_auto_connect()
 
         def failure(error: BaseException) -> None:
             self._regions_busy = False
             self.log("error", "activity.regions_failed")
             self._update_controls()
             self.update_connection_status(force=True)
+            if self._initial_region_refresh_started and not self._initial_region_refresh_complete:
+                self._initial_region_refresh_complete = True
+                self._initial_region_refresh_failed = True
+                self._maybe_startup_auto_connect()
             self._show_error(error)
 
         self._run_worker(job, on_success=success, on_failure=failure)
@@ -4932,9 +5092,11 @@ class MainWindow(QMainWindow):
             menu.addAction(status_action)
             menu.addSeparator()
             show_action = QAction(tr("tray.show"), menu)
+            show_action.setIcon(tray_menu_icon("show"))
             show_action.triggered.connect(self.show_window)
             menu.addAction(show_action)
             quit_action = QAction(tr("tray.quit"), menu)
+            quit_action.setIcon(tray_menu_icon("quit"))
             quit_action.triggered.connect(self.request_quit)
             menu.addAction(quit_action)
             self.tray.setContextMenu(menu)
@@ -4977,6 +5139,7 @@ class MainWindow(QMainWindow):
 
         if connected:
             disconnect_action = QAction(tr("connection.disconnect"), menu)
+            disconnect_action.setIcon(tray_menu_icon("disconnect"))
             disconnect_action.setEnabled(
                 network_state_known and not self._connection_busy
             )
@@ -4986,6 +5149,7 @@ class MainWindow(QMainWindow):
             menu.addAction(disconnect_action)
         else:
             connect_action = QAction(menu)
+            connect_action.setIcon(tray_menu_icon("connect"))
             if not network_state_known:
                 connect_action.setText(tr("connection.connect"))
                 connect_action.setEnabled(False)
@@ -5039,6 +5203,7 @@ class MainWindow(QMainWindow):
         locations_menu = menu.addMenu(
             tr("tray.switch_server") if connected else tr("tray.connect_with")
         )
+        locations_menu.setIcon(tray_menu_icon("locations"))
         locations_menu.setEnabled(
             network_state_known
             and bool(self.regions)
@@ -5096,10 +5261,12 @@ class MainWindow(QMainWindow):
 
         menu.addSeparator()
         show_action = QAction(tr("tray.show"), menu)
+        show_action.setIcon(tray_menu_icon("show"))
         show_action.triggered.connect(self.show_window)
         menu.addAction(show_action)
 
         quit_action = QAction(tr("tray.quit"), menu)
+        quit_action.setIcon(tray_menu_icon("quit"))
         quit_action.triggered.connect(self.request_quit)
         menu.addAction(quit_action)
 
@@ -5123,6 +5290,7 @@ class MainWindow(QMainWindow):
             return None
 
         favorites_menu = menu.addMenu(tr("tray.favorites"))
+        favorites_menu.setIcon(tray_menu_icon("favorites"))
         favorites_menu.setEnabled(enabled)
 
         current_by_id = {region.region_id: region for region in self.regions}
@@ -5141,7 +5309,6 @@ class MainWindow(QMainWindow):
                 compact_region_display_name(region, language()),
                 favorites_menu,
             )
-            action.setIcon(self._region_marker_icon("★", accent=True))
             action.triggered.connect(
                 lambda checked=False, selected=region: self.connect_region(selected)
             )
@@ -5153,7 +5320,6 @@ class MainWindow(QMainWindow):
                 f"{self._favorite_snapshot_display_name(favorite)} · {unavailable}",
                 favorites_menu,
             )
-            action.setIcon(self._region_marker_icon("★", accent=True))
             action.setEnabled(False)
             favorites_menu.addAction(action)
 

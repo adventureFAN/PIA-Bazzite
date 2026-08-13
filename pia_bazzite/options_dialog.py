@@ -9,6 +9,8 @@ from PySide6.QtGui import (
     QIcon,
     QPainter,
     QPainterPath,
+    QPalette,
+    QPen,
     QPixmap,
     QStandardItemModel,
 )
@@ -24,6 +26,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from .autostart import autostart_enabled
 from .auto_connect import (
     AUTO_CONNECT_FASTEST,
     AUTO_CONNECT_KEY,
@@ -48,7 +51,7 @@ from .settings import bool_value
 
 
 OPTIONS_DIALOG_WIDTH = 560
-OPTIONS_DIALOG_HEIGHT = 410
+OPTIONS_DIALOG_HEIGHT = 440
 OPTIONS_LABEL_COLUMN_WIDTH = 230
 OPTIONS_FIELD_WIDTH = 250
 AUTO_CONNECT_POPUP_VISIBLE_ITEMS = 20
@@ -60,7 +63,11 @@ class AutoConnectComboBox(QComboBox):
 
     def showPopup(self) -> None:
         super().showPopup()
-        QTimer.singleShot(0, self._limit_popup_height)
+        QTimer.singleShot(0, self._prepare_popup)
+
+    def _prepare_popup(self) -> None:
+        self._limit_popup_height()
+        self.view().scrollToTop()
 
     def _limit_popup_height(self) -> None:
         view = self.view()
@@ -83,6 +90,7 @@ class OptionsValues:
     theme: str
     quit_behavior: str
     tray_enabled: bool
+    autostart_enabled: bool
     public_network_provider: str
     auto_connect_target: str
 
@@ -143,6 +151,10 @@ class OptionsDialog(QDialog):
         )
         self.tray_checkbox.setToolTip(tr("tray.enabled_tooltip"))
 
+        self.autostart_checkbox = QCheckBox(tr("options.autostart_enabled"))
+        self.autostart_checkbox.setChecked(autostart_enabled())
+        self.autostart_checkbox.setToolTip(tr("options.autostart_tooltip"))
+
         self.auto_connect_combo = AutoConnectComboBox()
         self._configure_combo(self.auto_connect_combo)
         self._populate_auto_connect_combo(regions, favorites)
@@ -194,6 +206,7 @@ class OptionsDialog(QDialog):
             self.quit_behavior_combo,
         )
         general_form.addRow(self._form_label(""), self.tray_checkbox)
+        general_form.addRow(self._form_label(""), self.autostart_checkbox)
 
         network_group = QGroupBox(tr("options.network"))
         network_form = QFormLayout(network_group)
@@ -247,8 +260,22 @@ class OptionsDialog(QDialog):
         favorites: tuple[FavoriteRegion, ...] | list[FavoriteRegion],
     ) -> None:
         combo = self.auto_connect_combo
-        combo.addItem(tr("options.auto_connect.off"), AUTO_CONNECT_OFF)
-        combo.addItem(tr("options.auto_connect.last"), AUTO_CONNECT_LAST)
+        combo.addItem(
+            self._auto_connect_mode_icon("off"),
+            tr("options.auto_connect.off"),
+            AUTO_CONNECT_OFF,
+        )
+        combo.addItem(
+            self._auto_connect_mode_icon("last"),
+            tr("options.auto_connect.last"),
+            AUTO_CONNECT_LAST,
+        )
+        combo.addItem(
+            self._auto_connect_marker_icon("⚡"),
+            tr("connection.fastest"),
+            AUTO_CONNECT_FASTEST,
+        )
+        combo.insertSeparator(combo.count())
 
         current_by_id = {region.region_id: region for region in regions}
         favorite_ids = {favorite.region_id for favorite in favorites}
@@ -259,28 +286,20 @@ class OptionsDialog(QDialog):
         ]
         available_favorites.sort(key=self._region_ping_sort_key)
 
-        if available_favorites:
-            combo.insertSeparator(combo.count())
-            self._add_combo_heading(combo, tr("options.auto_connect.favorites"))
-            for region in available_favorites:
-                combo.addItem(
-                    self._auto_connect_marker_icon("★"),
-                    compact_region_display_name(region, language()),
-                    region_auto_connect_target(region.region_id),
-                )
-
-        combo.insertSeparator(combo.count())
-        combo.addItem(
-            self._auto_connect_marker_icon("⚡"),
-            tr("connection.fastest"),
-            AUTO_CONNECT_FASTEST,
-        )
-        combo.insertSeparator(combo.count())
+        for region in available_favorites:
+            combo.addItem(
+                self._auto_connect_marker_icon("★"),
+                compact_region_display_name(region, language()),
+                region_auto_connect_target(region.region_id),
+            )
 
         normal_regions = [
             region for region in regions if region.region_id not in favorite_ids
         ]
         normal_regions.sort(key=self._region_ping_sort_key)
+        if available_favorites and normal_regions:
+            combo.insertSeparator(combo.count())
+
         for region in normal_regions:
             combo.addItem(
                 compact_region_display_name(region, language()),
@@ -348,6 +367,60 @@ class OptionsDialog(QDialog):
         painter.end()
         return QIcon(pixmap)
 
+    def _auto_connect_mode_icon(self, role: str) -> QIcon:
+        """Return a neutral icon for non-server Auto-Connect modes."""
+
+        theme_names = {
+            "off": ("process-stop", "dialog-cancel"),
+            "last": ("view-refresh", "view-history", "edit-redo"),
+        }
+        for name in theme_names.get(role, ()):
+            icon = QIcon.fromTheme(name)
+            if not icon.isNull():
+                return icon
+
+        size = self.auto_connect_combo.iconSize()
+        pixmap = QPixmap(size)
+        pixmap.fill(Qt.GlobalColor.transparent)
+
+        painter = QPainter(pixmap)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        color = self.palette().color(QPalette.ColorRole.Text)
+
+        if role == "off":
+            side = min(size.width(), size.height()) * 0.48
+            x = (size.width() - side) / 2
+            y = (size.height() - side) / 2
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(color)
+            painter.drawRoundedRect(int(x), int(y), int(side), int(side), 2, 2)
+        else:
+            pen = QPen(color, max(1.5, size.height() * 0.10))
+            pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+            pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+            painter.setPen(pen)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+
+            margin = max(2, int(size.height() * 0.18))
+            width = max(1, size.width() - 2 * margin)
+            height = max(1, size.height() - 2 * margin)
+            painter.drawArc(margin, margin, width, height, 35 * 16, 285 * 16)
+            painter.drawLine(
+                int(size.width() * 0.70),
+                int(size.height() * 0.18),
+                int(size.width() * 0.88),
+                int(size.height() * 0.22),
+            )
+            painter.drawLine(
+                int(size.width() * 0.88),
+                int(size.height() * 0.22),
+                int(size.width() * 0.81),
+                int(size.height() * 0.39),
+            )
+
+        painter.end()
+        return QIcon(pixmap)
+
     @staticmethod
     def _region_ping_sort_key(region: Region) -> tuple[bool, float, str]:
         return (
@@ -355,11 +428,6 @@ class OptionsDialog(QDialog):
             float("inf") if region.ping_ms is None else region.ping_ms,
             region.name.casefold(),
         )
-
-    @staticmethod
-    def _add_combo_heading(combo: QComboBox, text: str) -> None:
-        combo.addItem(text, None)
-        OptionsDialog._set_combo_item_enabled(combo, combo.count() - 1, False)
 
     @staticmethod
     def _set_combo_item_enabled(combo: QComboBox, index: int, enabled: bool) -> None:
@@ -399,6 +467,7 @@ class OptionsDialog(QDialog):
             theme=str(self.theme_combo.currentData() or "system"),
             quit_behavior=str(self.quit_behavior_combo.currentData() or "ask"),
             tray_enabled=self.tray_checkbox.isChecked(),
+            autostart_enabled=self.autostart_checkbox.isChecked(),
             public_network_provider=normalize_online_public_network_provider(
                 self.public_network_provider_combo.currentData()
             ),

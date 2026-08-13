@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import math
+
 from PySide6.QtCore import Qt
 from PySide6.QtGui import (
     QColor,
@@ -157,3 +159,86 @@ def system_status_icon(state: str, size: int = 18) -> QIcon:
 
     painter.end()
     return QIcon(pixmap)
+
+_TRAY_MENU_THEME_NAMES = {
+    "connect": ("network-connect", "network-vpn"),
+    "disconnect": ("network-disconnect", "network-offline"),
+    "locations": ("network-vpn", "network-server"),
+    "favorites": ("emblem-favorite", "bookmarks"),
+    "show": ("view-restore", "window-new"),
+    "quit": ("application-exit", "system-log-out"),
+}
+
+
+def _tray_menu_fallback_icon(role: str, size: int = 18) -> QIcon:
+    """Draw a small neutral fallback when the desktop theme lacks an icon."""
+
+    pixmap = QPixmap(size, size)
+    pixmap.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(pixmap)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+
+    app = QGuiApplication.instance()
+    palette = app.palette() if app is not None else QPalette()
+    color = palette.color(QPalette.ColorRole.Text)
+    pen = QPen(color, max(1.5, size * 0.10))
+    pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+    pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+    painter.setPen(pen)
+    painter.setBrush(Qt.BrushStyle.NoBrush)
+
+    if role == "connect":
+        painter.drawLine(int(size * 0.12), size // 2, int(size * 0.75), size // 2)
+        painter.drawLine(int(size * 0.55), int(size * 0.28), int(size * 0.78), size // 2)
+        painter.drawLine(int(size * 0.55), int(size * 0.72), int(size * 0.78), size // 2)
+    elif role == "disconnect":
+        painter.drawLine(int(size * 0.24), int(size * 0.24), int(size * 0.76), int(size * 0.76))
+        painter.drawLine(int(size * 0.76), int(size * 0.24), int(size * 0.24), int(size * 0.76))
+    elif role == "locations":
+        painter.drawEllipse(int(size * 0.16), int(size * 0.16), int(size * 0.68), int(size * 0.68))
+        painter.drawLine(size // 2, int(size * 0.18), size // 2, int(size * 0.82))
+        painter.drawArc(int(size * 0.30), int(size * 0.16), int(size * 0.40), int(size * 0.68), 90 * 16, 180 * 16)
+        painter.drawArc(int(size * 0.30), int(size * 0.16), int(size * 0.40), int(size * 0.68), 270 * 16, 180 * 16)
+    elif role == "favorites":
+        center_x = size * 0.50
+        center_y = size * 0.51
+        outer = size * 0.36
+        inner = outer * 0.43
+        path = QPainterPath()
+        for index in range(10):
+            radius = outer if index % 2 == 0 else inner
+            angle = -math.pi / 2 + index * math.pi / 5
+            x = center_x + math.cos(angle) * radius
+            y = center_y + math.sin(angle) * radius
+            if index == 0:
+                path.moveTo(x, y)
+            else:
+                path.lineTo(x, y)
+        path.closeSubpath()
+        painter.setBrush(color)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.drawPath(path)
+    elif role == "show":
+        painter.drawRoundedRect(
+            int(size * 0.16), int(size * 0.22), int(size * 0.68), int(size * 0.56), 2, 2
+        )
+        painter.drawLine(int(size * 0.16), int(size * 0.36), int(size * 0.84), int(size * 0.36))
+    elif role == "quit":
+        painter.drawLine(size // 2, int(size * 0.10), size // 2, int(size * 0.50))
+        painter.drawArc(int(size * 0.18), int(size * 0.18), int(size * 0.64), int(size * 0.68), 35 * 16, 290 * 16)
+    else:
+        painter.drawEllipse(int(size * 0.28), int(size * 0.28), int(size * 0.44), int(size * 0.44))
+
+    painter.end()
+    return QIcon(pixmap)
+
+
+def tray_menu_icon(role: str, size: int = 18) -> QIcon:
+    """Return a KDE/theme-native tray action icon with a safe vector fallback."""
+
+    names = _TRAY_MENU_THEME_NAMES.get(role, ())
+    for name in names:
+        icon = QIcon.fromTheme(name)
+        if not icon.isNull():
+            return icon
+    return _tray_menu_fallback_icon(role, size)

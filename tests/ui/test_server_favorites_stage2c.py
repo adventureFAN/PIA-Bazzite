@@ -49,13 +49,10 @@ class ServerFavoritesStage2CTests(unittest.TestCase):
         self.assertLess(favorites, bottom_separator)
         self.assertLess(bottom_separator, show)
 
-    def test_only_favorite_entries_use_gold_star_icons(self) -> None:
+    def test_favorites_root_has_menu_icon_and_child_rows_stay_clean(self) -> None:
         helper = self._method("_add_tray_favorites_menu", "_tray_setting_changed")
-        self.assertNotIn("favorites_menu.menuAction().setIcon(", helper)
-        self.assertGreaterEqual(
-            helper.count('action.setIcon(self._region_marker_icon("★", accent=True))'),
-            2,
-        )
+        self.assertIn('favorites_menu.setIcon(tray_menu_icon("favorites"))', helper)
+        self.assertNotIn('action.setIcon(self._region_marker_icon("★", accent=True))', helper)
 
     def test_available_favorites_use_current_catalog_and_existing_connect_path(self) -> None:
         helper = self._method("_add_tray_favorites_menu", "_tray_setting_changed")
