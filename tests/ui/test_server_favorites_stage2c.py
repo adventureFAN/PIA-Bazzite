@@ -82,7 +82,8 @@ class ServerFavoritesStage2CTests(unittest.TestCase):
 
         self.assertLess(fastest, reachable)
         self.assertLess(reachable, full_list)
-        self.assertIn('f"⚡ {tr(\'connection.fastest\')}"', tray)
+        self.assertIn('fastest_action.setIcon(tray_menu_icon("fastest"))', tray)
+        self.assertNotIn('f"⚡ {tr(\'connection.fastest\')}"', tray)
         reachable_block = tray[reachable:tray.index("for region in reachable:", reachable)]
         self.assertNotIn("favorite_ids", reachable_block)
         self.assertIn("[:20]", reachable_block)

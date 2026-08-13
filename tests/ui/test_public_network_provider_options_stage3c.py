@@ -58,7 +58,7 @@ class Stage3CProviderOptionsTests(unittest.TestCase):
         )
 
     def test_options_dialog_exposes_one_network_provider_selector(self) -> None:
-        self.assertIn('QGroupBox(tr("options.network"))', self.options)
+        self.assertIn('network_group = QGroupBox()', self.options)
         self.assertIn('tr("options.public_info_provider")', self.options)
         self.assertIn('tr("options.provider.freeipapi")', self.options)
         self.assertIn('tr("options.provider.geojs")', self.options)
@@ -82,12 +82,13 @@ class Stage3CProviderOptionsTests(unittest.TestCase):
             self.options,
         )
         self.assertIn(
-            'self._form_label(tr("options.public_info_provider"))',
+            'tr("options.public_info_provider"),\n            self.public_network_provider_combo,',
             self.options,
         )
-        self.assertIn("OPTIONS_LABEL_COLUMN_WIDTH = 230", self.options)
+        self.assertIn("QGridLayout", self.options)
+        self.assertIn("layout.setColumnMinimumWidth(1, OPTIONS_FIELD_WIDTH)", self.options)
         self.assertIn("OPTIONS_FIELD_WIDTH = 250", self.options)
-        self.assertIn("OPTIONS_DIALOG_HEIGHT = 440", self.options)
+        self.assertIn("OPTIONS_DIALOG_HEIGHT = 420", self.options)
 
     def test_saving_provider_is_persistent_and_refreshes_public_info(self) -> None:
         show_start = self.gui.index("    def show_options")
@@ -109,7 +110,12 @@ class Stage3CProviderOptionsTests(unittest.TestCase):
             change,
         )
         self.assertIn("self.settings.sync()", change)
-        self.assertIn("self.refresh_public_info(show_errors=False)", change)
+        self.assertIn("public_info_setting_changed", show)
+        self.assertIn(
+            "if public_info_setting_changed and values.show_public_info:",
+            show,
+        )
+        self.assertIn("self.refresh_public_info(show_errors=False)", show)
 
     def test_public_info_refresh_uses_selected_provider(self) -> None:
         start = self.gui.index("    def refresh_public_info")

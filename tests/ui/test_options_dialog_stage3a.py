@@ -76,7 +76,7 @@ class Stage3AOptionsDialogTests(unittest.TestCase):
         self.assertIn("self.options_menu.addAction(self.kill_switch_action)", self.gui)
 
     def test_options_copy_and_menu_names_are_bilingual(self) -> None:
-        self.assertEqual(self.de["menu.tools"], "&Funktionen")
+        self.assertEqual(self.de["menu.tools"], "&Extras")
         self.assertEqual(self.en["menu.tools"], "&Tools")
         self.assertEqual(self.de["menu.options_dialog"], "&Optionen …")
         self.assertEqual(self.en["menu.options_dialog"], "&Options…")
@@ -93,16 +93,17 @@ class Stage3AOptionsDialogTests(unittest.TestCase):
             self.assertIn(key, self.en)
 
     def test_option_selectors_share_one_visual_grid(self) -> None:
-        self.assertIn("OPTIONS_LABEL_COLUMN_WIDTH = 230", self.options)
         self.assertIn("OPTIONS_FIELD_WIDTH = 250", self.options)
         self.assertGreaterEqual(
             self.options.count("self._configure_combo("),
             3,
         )
         self.assertIn("combo.setFixedWidth(OPTIONS_FIELD_WIDTH)", self.options)
-        self.assertIn("label.setFixedWidth(OPTIONS_LABEL_COLUMN_WIDTH)", self.options)
+        self.assertIn("QGridLayout", self.options)
+        self.assertIn("layout.setColumnStretch(0, 1)", self.options)
+        self.assertIn("layout.setColumnMinimumWidth(1, OPTIONS_FIELD_WIDTH)", self.options)
         self.assertIn(
-            'self._form_label(tr("options.theme"))',
+            'tr("options.theme"),\n            self.theme_combo,',
             self.options,
         )
 

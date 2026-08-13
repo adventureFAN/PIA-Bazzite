@@ -64,7 +64,7 @@ class Stage4C1PolishTests(unittest.TestCase):
 
     def test_main_window_is_narrower_in_both_modes(self) -> None:
         source = GUI.read_text(encoding="utf-8")
-        self.assertIn("COMPACT_SIZE = QSize(740, 510)", source)
+        self.assertIn("COMPACT_SIZE = QSize(690, 510)", source)
         self.assertIn("LOG_SIZE = QSize(760, 780)", source)
 
     def test_runtime_preview_checks_wrapped_tooltips_and_dynamic_log_layout(self) -> None:

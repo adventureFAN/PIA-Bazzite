@@ -121,12 +121,18 @@ class ServerMarkersStage3DTests(unittest.TestCase):
         self.assertNotIn("status_action.setIcon(status_dot_icon", self.gui)
 
     def test_marker_quickinfo_is_bilingual_and_key_sets_stay_equal(self) -> None:
-        self.assertEqual(self.de["region.virtual_tooltip"], "Virtueller Standort")
+        self.assertEqual(
+            self.de["region.virtual_tooltip"],
+            "Virtueller Standort\nDer Server befindet sich physisch in einem anderen Land.",
+        )
+        self.assertEqual(
+            self.en["region.virtual_tooltip"],
+            "Virtual location\nThe server is physically located in another country.",
+        )
         self.assertEqual(
             self.de["region.streaming_tooltip"],
             "Streaming-optimierter Standort",
         )
-        self.assertEqual(self.en["region.virtual_tooltip"], "Virtual location")
         self.assertEqual(
             self.en["region.streaming_tooltip"],
             "Streaming-optimized location",

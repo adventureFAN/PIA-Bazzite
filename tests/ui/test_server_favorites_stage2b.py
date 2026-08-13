@@ -64,7 +64,7 @@ class ServerFavoritesStage2BTests(unittest.TestCase):
         populate = self._method("_populate_region_combo", "_toggle_region_favorite")
         favorite_loop = populate.index("for region in favorite_regions:")
         missing_loop = populate.index("for favorite in missing_favorites:")
-        fastest = populate.index("if not query:")
+        fastest = populate.index("if not query and self._region_filter_mode == REGION_FILTER_ALL:")
         normal_loop = populate.index("for region in normal_regions:")
 
         self.assertLess(favorite_loop, missing_loop)
@@ -82,7 +82,7 @@ class ServerFavoritesStage2BTests(unittest.TestCase):
         self.assertIn("QPalette.ColorRole.Text", marker)
         self.assertIn('star = "★" if favorite else "☆"', add_item)
         self.assertIn("self._region_marker_icon(star, accent=favorite)", add_item)
-        self.assertIn('self._region_marker_icon("⚡", accent=True)', populate)
+        self.assertIn('self._region_marker_icon("⚡", accent=False)', populate)
         self.assertIn('if symbol == "⚡":', marker)
         self.assertIn("QPainterPath()", marker)
         self.assertIn("painter.fillPath(bolt, color)", marker)

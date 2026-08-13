@@ -158,6 +158,12 @@ def region_is_streaming(region: Region) -> bool:
     return region.name.strip().endswith(STREAMING_NAME_SUFFIX)
 
 
+def region_is_normal(region: Region) -> bool:
+    """Return True when a region is neither virtual nor streaming-optimized."""
+
+    return not region.geo and not region_is_streaming(region)
+
+
 def compact_region_display_name(region: Region, language_code: str) -> str:
     """Compact server-list label with neutral virtual/streaming markers.
 
@@ -189,12 +195,48 @@ def compact_region_display_name(region: Region, language_code: str) -> str:
 
 
 def search_haystack(region: Region) -> str:
+    """Return locale-independent searchable text for one region.
+
+    Marker meaning is included deliberately even though the compact UI only
+    shows symbols.  This lets users search for e.g. ``virtuell``/``virtual``,
+    ``streaming`` or ``normal`` without exposing the verbose marker wording in
+    every visible row.
+    """
+
+    type_terms: list[str] = []
+    if region.geo:
+        type_terms.extend((
+            "virtual virtual location",
+            "virtuell virtuelle virtueller virtuellen standort",
+        ))
+    if region_is_streaming(region):
+        type_terms.extend((
+            "streaming streaming optimized streaming-optimized",
+            "streaming optimiert optimierte streaming-optimiert streaming-optimierte",
+        ))
+    if region_is_normal(region):
+        type_terms.extend((
+            "normal normal location regular",
+            "normal normale normaler normalen standort",
+        ))
+
     return " ".join([
         region.region_id,
         region.name,
         localized_region_name(region, "en"),
         localized_region_name(region, "de"),
+        *type_terms,
     ]).casefold()
+
+
+def region_matches_search(region: Region, query: str) -> bool:
+    """Match every whitespace-separated search token against a region."""
+
+    tokens = [token for token in query.casefold().split() if token]
+    if not tokens:
+        return True
+    haystack = search_haystack(region)
+    return all(token in haystack for token in tokens)
 
 
 def public_country_name(code: str, language_code: str) -> str:

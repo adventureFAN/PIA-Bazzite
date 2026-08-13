@@ -14,6 +14,95 @@ INTERFACE_NAME = "piabazzite"
 IPV4_PROBE_TARGET = "1.1.1.1"
 
 
+_PHYSICAL_UPLINK_TYPES = frozenset({
+    "ethernet",
+    "wifi",
+    "gsm",
+    "cdma",
+    "bluetooth",
+    "infiniband",
+    "bond",
+    "team",
+    "vlan",
+    "ppp",
+})
+
+
+def _parse_device_general_records(output: str) -> tuple[dict[str, str], ...]:
+    """Parse terse ``nmcli device show`` GENERAL records without prose matching.
+
+    ``GENERAL.STATE`` starts with NetworkManager's numeric device-state value,
+    so callers do not depend on translated words such as ``connected``.
+    """
+
+    records: list[dict[str, str]] = []
+    current: dict[str, str] = {}
+    for raw_line in output.splitlines():
+        line = raw_line.strip()
+        if not line:
+            if current:
+                records.append(current)
+                current = {}
+            continue
+        key, separator, value = line.partition(":")
+        if not separator:
+            continue
+        if key == "GENERAL.DEVICE" and current:
+            records.append(current)
+            current = {}
+        current[key] = value
+    if current:
+        records.append(current)
+    return tuple(records)
+
+
+def _device_state_code(value: str) -> int | None:
+    token = value.strip().split(maxsplit=1)[0] if value.strip() else ""
+    try:
+        return int(token)
+    except ValueError:
+        return None
+
+
+def physical_network_available_from_nmcli(output: str) -> bool:
+    """Return whether an activated physical/uplink-capable device exists.
+
+    Virtual-only devices (for example WireGuard, loopback, Podman bridges and
+    tunnel devices) deliberately do not count as an underlay. NetworkManager's
+    device state ``100`` means activated.
+    """
+
+    for record in _parse_device_general_records(output):
+        device_type = record.get("GENERAL.TYPE", "").strip().casefold()
+        state = _device_state_code(record.get("GENERAL.STATE", ""))
+        if device_type in _PHYSICAL_UPLINK_TYPES and state == 100:
+            return True
+    return False
+
+
+def physical_network_available() -> bool:
+    """Return True when NetworkManager has an activated physical underlay.
+
+    This intentionally does not use NetworkManager's global connectivity
+    result: a correctly enforced Kill Switch can make that result ``limited``
+    even though Wi-Fi/Ethernet is fully available.
+    """
+
+    ensure_available()
+    completed = _run(
+        [
+            "nmcli",
+            "-t",
+            "-f",
+            "GENERAL.DEVICE,GENERAL.TYPE,GENERAL.STATE",
+            "device",
+            "show",
+        ],
+        timeout=10,
+    )
+    return physical_network_available_from_nmcli(completed.stdout)
+
+
 class NetworkManagerError(AppError):
     pass
 

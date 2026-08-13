@@ -7,7 +7,7 @@ from html import escape
 from pathlib import Path
 from typing import Any
 
-from PySide6.QtCore import QEvent, QSettings, QSize, QThreadPool, QTimer, Qt, Signal
+from PySide6.QtCore import QEvent, QPoint, QProcess, QSettings, QSize, QThreadPool, QTimer, Qt, Signal
 from PySide6.QtGui import (
     QAction,
     QActionGroup,
@@ -151,8 +151,9 @@ from .region_names import (
     localized_region_name,
     public_country_name,
     region_display_name,
+    region_is_normal,
     region_is_streaming,
-    search_haystack,
+    region_matches_search,
 )
 from .settings import bool_value, cache_dir, crash_recovery_path, state_dir
 from .system_checks import required_checks_pass, run_system_checks
@@ -161,7 +162,7 @@ from .workers import FunctionWorker
 
 
 FASTEST_ID = "__fastest__"
-COMPACT_SIZE = QSize(740, 510)
+COMPACT_SIZE = QSize(690, 510)
 LOG_SIZE = QSize(760, 780)
 REGION_POPUP_VISIBLE_ITEMS = 20
 REGION_FAVORITE_TOGGLE_ROLE = int(Qt.ItemDataRole.UserRole) + 1
@@ -169,6 +170,10 @@ REGION_FAVORITE_AVAILABLE_ROLE = int(Qt.ItemDataRole.UserRole) + 2
 REGION_FAVORITE_STAR_HIT_WIDTH = 34
 REGION_MARKER_ICON_SIZE = QSize(18, 18)
 REGION_MARKER_ACCENT_COLOR = "#f4c542"
+REGION_FILTER_ALL = "all"
+REGION_FILTER_NORMAL = "normal"
+REGION_FILTER_VIRTUAL = "virtual"
+REGION_FILTER_STREAMING = "streaming"
 PROJECT_URL = "https://github.com/adventureFAN/PIA-Bazzite"
 KILL_SWITCH_RECONCILIATION_REQUIRED_KEY = "kill_switch/reconciliation_required"
 
@@ -748,6 +753,7 @@ class MainWindow(QMainWindow):
         )
         self._protected_reconnect_scheduled = False
         self._region_selection_guard = False
+        self._region_filter_mode = REGION_FILTER_ALL
         runtime_status_reader = (
             kill_switch_status_reader
             if kill_switch_status_reader is not None
@@ -768,6 +774,10 @@ class MainWindow(QMainWindow):
         self._regions_busy = False
         self._public_info_busy = False
         self._last_connected_state: bool | None = None
+        self._physical_network_available: bool | None = None
+        self._network_monitor: QProcess | None = None
+        self._network_monitor_refresh_pending = False
+        self._network_monitor_warning_logged = False
         self._active_region_id = str(
             settings.value("connection/active_region_id", "")
         ).strip()
@@ -775,7 +785,6 @@ class MainWindow(QMainWindow):
             settings.value("connection/active_region_name", "")
         ).strip()
         self._allow_close = False
-        self._close_hint_shown = False
         self._initial_setup_done = False
         self._initial_region_refresh_pending = False
         self._initial_region_refresh_started = False
@@ -824,10 +833,16 @@ class MainWindow(QMainWindow):
         self.run_system_check(show_dialog=False, log_result=True)
         self._populate_region_combo()
         self.update_connection_status(force=True)
+        self.update_physical_network_status(force=True)
+        self._start_network_monitor()
 
         self.status_timer = QTimer(self)
         self.status_timer.setInterval(3000)
         self.status_timer.timeout.connect(self.update_connection_status)
+        # ``nmcli monitor`` provides the fast event trigger. This 3-second
+        # query is a deliberately slow safety net if the monitor subprocess
+        # ever exits; both paths use the same authoritative state reader.
+        self.status_timer.timeout.connect(self.update_physical_network_status)
         self.status_timer.start()
 
         self.log("info", "log.started", version=__version__)
@@ -975,7 +990,7 @@ class MainWindow(QMainWindow):
         self.file_menu = self.menuBar().addMenu("")
         self.file_menu.addAction(self.exit_action)
 
-        # "Tools" / "Funktionen" contains immediate commands and one entry for
+        # "Tools" / "Extras" contains immediate commands and one entry for
         # ordinary persistent preferences.  Language, appearance, quit behavior
         # and tray visibility live in the Options dialog instead of nested menus.
         self.options_menu = self.menuBar().addMenu("")
@@ -1024,15 +1039,15 @@ class MainWindow(QMainWindow):
         self.ip_refresh_button.clicked.connect(
             lambda: self.refresh_public_info(show_errors=True)
         )
-        ip_widget = QWidget()
-        ip_layout = QHBoxLayout(ip_widget)
+        self.ip_widget = QWidget()
+        ip_layout = QHBoxLayout(self.ip_widget)
         ip_layout.setContentsMargins(0, 0, 0, 0)
         ip_layout.setSpacing(7)
         ip_layout.addWidget(self.ip_value)
         ip_layout.addWidget(self.ip_refresh_button)
         ip_layout.addStretch()
         facts.addWidget(self.ip_caption, 0, 0)
-        facts.addWidget(ip_widget, 0, 1)
+        facts.addWidget(self.ip_widget, 0, 1)
 
         self.country_caption = QLabel()
         self._set_demi_bold(self.country_caption)
@@ -1060,6 +1075,7 @@ class MainWindow(QMainWindow):
 
         facts.setColumnStretch(1, 1)
         status_layout.addLayout(facts)
+        self._apply_public_info_visibility()
         page.addWidget(self.status_group)
 
         self.connection_group = QGroupBox()
@@ -1068,6 +1084,37 @@ class MainWindow(QMainWindow):
         self.search_edit = QLineEdit()
         self.search_edit.setClearButtonEnabled(True)
         self.search_edit.textChanged.connect(self._populate_region_combo)
+
+        # Keep type filtering inside the existing search field instead of
+        # spending another row on filter controls. The action opens a compact
+        # exclusive menu for All / Normal / Virtual / Streaming locations.
+        self.region_filter_menu = QMenu(self)
+        self.region_filter_group = QActionGroup(self)
+        self.region_filter_group.setExclusive(True)
+        self.region_filter_actions: dict[str, QAction] = {}
+        for filter_mode in (
+            REGION_FILTER_ALL,
+            REGION_FILTER_NORMAL,
+            REGION_FILTER_VIRTUAL,
+            REGION_FILTER_STREAMING,
+        ):
+            action = QAction(self)
+            action.setCheckable(True)
+            action.setData(filter_mode)
+            action.triggered.connect(
+                lambda checked=False, mode=filter_mode: self._set_region_filter(mode)
+            )
+            self.region_filter_group.addAction(action)
+            self.region_filter_menu.addAction(action)
+            self.region_filter_actions[filter_mode] = action
+
+        self.region_filter_action = QAction(self)
+        self.region_filter_action.setIcon(self._region_filter_icon())
+        self.region_filter_action.triggered.connect(self._show_region_filter_menu)
+        self.search_edit.addAction(
+            self.region_filter_action,
+            QLineEdit.ActionPosition.TrailingPosition,
+        )
         connection_layout.addWidget(self.search_edit)
 
         self.region_combo = RegionComboBox()
@@ -2050,6 +2097,18 @@ class MainWindow(QMainWindow):
             and previous_mode != state.mode.value
         ):
             self.log(state.log_level, state.log_key)
+            if state.mode.value == "blocking":
+                self._show_security_notification(
+                    "notification.kill_switch_blocking.title",
+                    "notification.kill_switch_blocking.message",
+                    QSystemTrayIcon.MessageIcon.Warning,
+                )
+            elif state.mode.value == "error":
+                self._show_security_notification(
+                    "notification.kill_switch_error.title",
+                    "notification.kill_switch_error.message",
+                    QSystemTrayIcon.MessageIcon.Critical,
+                )
 
     def _set_stage4_preview_state(
         self,
@@ -2148,6 +2207,10 @@ class MainWindow(QMainWindow):
 
         self.search_edit.setPlaceholderText(tr("connection.search_placeholder"))
         self.search_edit.setToolTip(tr("connection.search_tooltip"))
+        if hasattr(self, "region_filter_actions"):
+            for mode, action in self.region_filter_actions.items():
+                action.setText(tr(f"connection.filter.{mode}"))
+            self._sync_region_filter_ui()
         self.region_combo.setToolTip(tr("connection.combo_tooltip"))
 
         self.reload_button.setText(tr("connection.reload"))
@@ -2221,6 +2284,15 @@ class MainWindow(QMainWindow):
             self.settings, "ui/tray_enabled", True
         )
         current_autostart_enabled = autostart_enabled()
+        current_security_notifications = bool_value(
+            self.settings, "ui/security_notifications", True
+        )
+        current_confirm_server_switch = bool_value(
+            self.settings, "connection/confirm_server_switch", True
+        )
+        current_show_public_info = bool_value(
+            self.settings, "ui/show_public_info", True
+        )
         current_public_network_provider = normalize_online_public_network_provider(
             self.settings.value(
                 "network/public_info_provider",
@@ -2241,10 +2313,40 @@ class MainWindow(QMainWindow):
             self._tray_setting_changed(values.tray_enabled)
         if values.autostart_enabled != current_autostart_enabled:
             self.change_autostart_enabled(values.autostart_enabled)
+        if values.security_notifications != current_security_notifications:
+            self.change_security_notifications(values.security_notifications)
+        if values.confirm_server_switch != current_confirm_server_switch:
+            self.change_confirm_server_switch(values.confirm_server_switch)
+
+        public_info_setting_changed = (
+            values.public_network_provider != current_public_network_provider
+            or values.show_public_info != current_show_public_info
+        )
+        if values.show_public_info != current_show_public_info:
+            self.change_show_public_info(values.show_public_info)
         if values.public_network_provider != current_public_network_provider:
             self.change_public_network_provider(values.public_network_provider)
+        if public_info_setting_changed and values.show_public_info:
+            self.refresh_public_info(show_errors=False)
+
         if values.auto_connect_target != current_auto_connect_target:
             self.change_auto_connect_target(values.auto_connect_target)
+
+    def change_security_notifications(self, enabled: bool) -> None:
+        self.settings.setValue("ui/security_notifications", bool(enabled))
+        self.settings.sync()
+
+    def change_confirm_server_switch(self, enabled: bool) -> None:
+        self.settings.setValue("connection/confirm_server_switch", bool(enabled))
+        self.settings.sync()
+
+    def change_show_public_info(self, enabled: bool) -> None:
+        self.settings.setValue("ui/show_public_info", bool(enabled))
+        self.settings.sync()
+        self._apply_public_info_visibility()
+        if not enabled:
+            self.public_info = None
+        self._update_controls()
 
     def change_autostart_enabled(self, enabled: bool) -> None:
         try:
@@ -2272,8 +2374,6 @@ class MainWindow(QMainWindow):
         normalized = normalize_online_public_network_provider(provider_id)
         self.settings.setValue("network/public_info_provider", normalized)
         self.settings.sync()
-        if not self._public_info_busy:
-            self.refresh_public_info(show_errors=False)
 
     def change_language(self, language_code: str) -> None:
         if language_code == language():
@@ -2781,6 +2881,36 @@ class MainWindow(QMainWindow):
         )
 
     # ------------------------------------------------------------------
+    # Desktop notifications
+    # ------------------------------------------------------------------
+    def _security_notifications_enabled(self) -> bool:
+        return bool_value(self.settings, "ui/security_notifications", True)
+
+    def _show_security_notification(
+        self,
+        title_key: str,
+        message_key: str,
+        icon: QSystemTrayIcon.MessageIcon,
+    ) -> None:
+        # Normal VPN connect/disconnect messages are already owned by Plasma /
+        # NetworkManager. PIA Bazzite only surfaces complementary security or
+        # failure events, and only while its main window is not already visible.
+        if self._stage4_preview or not self._security_notifications_enabled():
+            return
+        if self.isVisible():
+            return
+        if not hasattr(self, "tray") or not self.tray.isVisible():
+            return
+        if not QSystemTrayIcon.supportsMessages():
+            return
+        self.tray.showMessage(
+            tr(title_key),
+            tr(message_key),
+            icon,
+            6000,
+        )
+
+    # ------------------------------------------------------------------
     # Logging
     # ------------------------------------------------------------------
     def _scroll_live_log_to_end(self) -> None:
@@ -2975,12 +3105,22 @@ class MainWindow(QMainWindow):
             # the same dialog automatically a moment later.
             self._startup_auto_connect_attempted = True
             self.log("warning", "log.auto_connect.credentials_missing")
+            self._show_security_notification(
+                "notification.auto_connect_failed.title",
+                "notification.auto_connect_failed.credentials",
+                QSystemTrayIcon.MessageIcon.Warning,
+            )
             return
         if not self._initial_region_refresh_complete:
             return
         if self._initial_region_refresh_failed:
             self._startup_auto_connect_attempted = True
             self.log("warning", "log.auto_connect.regions_unavailable")
+            self._show_security_notification(
+                "notification.auto_connect_failed.title",
+                "notification.auto_connect_failed.regions",
+                QSystemTrayIcon.MessageIcon.Warning,
+            )
             return
         if not self._startup_kill_switch_reconciliation_complete:
             return
@@ -3002,6 +3142,11 @@ class MainWindow(QMainWindow):
                 "log.auto_connect.state_unknown",
                 details=redact_secrets(f"{type(exc).__name__}: {exc}"),
             )
+            self._show_security_notification(
+                "notification.auto_connect_failed.title",
+                "notification.auto_connect_failed.state_unknown",
+                QSystemTrayIcon.MessageIcon.Warning,
+            )
             return
 
         if connected:
@@ -3022,6 +3167,11 @@ class MainWindow(QMainWindow):
         if region is None:
             self._startup_auto_connect_attempted = True
             self.log("warning", "log.auto_connect.target_unavailable")
+            self._show_security_notification(
+                "notification.auto_connect_failed.title",
+                "notification.auto_connect_failed.target",
+                QSystemTrayIcon.MessageIcon.Warning,
+            )
             return
 
         self._startup_auto_connect_attempted = True
@@ -3312,14 +3462,121 @@ class MainWindow(QMainWindow):
 
         self._run_worker(job, on_success=success, on_failure=failure)
 
+    def _region_filter_icon(self) -> QIcon:
+        """Return a neutral, theme-aware filter icon for the search field."""
+
+        for name in ("view-filter", "filter", "view-filter-symbolic"):
+            icon = QIcon.fromTheme(name)
+            if not icon.isNull():
+                return icon
+
+        size = QSize(18, 18)
+        pixmap = QPixmap(size)
+        pixmap.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(pixmap)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        color = self.palette().color(QPalette.ColorRole.Text)
+        pen = painter.pen()
+        pen.setColor(color)
+        pen.setWidthF(1.8)
+        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+        painter.setPen(pen)
+        funnel = QPainterPath()
+        funnel.moveTo(3.0, 4.0)
+        funnel.lineTo(15.0, 4.0)
+        funnel.lineTo(10.5, 9.0)
+        funnel.lineTo(10.5, 14.0)
+        funnel.lineTo(7.5, 15.5)
+        funnel.lineTo(7.5, 9.0)
+        funnel.closeSubpath()
+        painter.drawPath(funnel)
+        painter.end()
+        return QIcon(pixmap)
+
+    def _show_region_filter_menu(self) -> None:
+        menu = self.region_filter_menu
+        menu.ensurePolished()
+        menu_size = menu.sizeHint()
+        bottom_right = self.search_edit.rect().bottomRight()
+        global_bottom_right = self.search_edit.mapToGlobal(bottom_right)
+        menu.exec(
+            global_bottom_right - QPoint(menu_size.width(), 0)
+        )
+
+    def _set_region_filter(self, filter_mode: str) -> None:
+        if filter_mode not in {
+            REGION_FILTER_ALL,
+            REGION_FILTER_NORMAL,
+            REGION_FILTER_VIRTUAL,
+            REGION_FILTER_STREAMING,
+        }:
+            filter_mode = REGION_FILTER_ALL
+        if self._region_filter_mode == filter_mode:
+            self._sync_region_filter_ui()
+            return
+        self._region_filter_mode = filter_mode
+        self._sync_region_filter_ui()
+        self._populate_region_combo()
+
+    def _sync_region_filter_ui(self) -> None:
+        if not hasattr(self, "region_filter_actions"):
+            return
+        for mode, action in self.region_filter_actions.items():
+            action.blockSignals(True)
+            action.setChecked(mode == self._region_filter_mode)
+            action.blockSignals(False)
+        if hasattr(self, "region_filter_action"):
+            label = tr(f"connection.filter.{self._region_filter_mode}")
+            self.region_filter_action.setToolTip(
+                tr("connection.filter.tooltip", filter=label)
+            )
+
+    def _region_matches_filter(self, region: Region) -> bool:
+        if self._region_filter_mode == REGION_FILTER_VIRTUAL:
+            return bool(region.geo)
+        if self._region_filter_mode == REGION_FILTER_STREAMING:
+            return region_is_streaming(region)
+        if self._region_filter_mode == REGION_FILTER_NORMAL:
+            return region_is_normal(region)
+        return True
+
+    def _favorite_snapshot_matches_filter(self, favorite: FavoriteRegion) -> bool:
+        streaming = favorite.name.strip().endswith(STREAMING_NAME_SUFFIX)
+        if self._region_filter_mode == REGION_FILTER_VIRTUAL:
+            return bool(favorite.geo)
+        if self._region_filter_mode == REGION_FILTER_STREAMING:
+            return streaming
+        if self._region_filter_mode == REGION_FILTER_NORMAL:
+            return not favorite.geo and not streaming
+        return True
+
     def _favorite_snapshot_matches_query(
         self,
         favorite: FavoriteRegion,
         query: str,
     ) -> bool:
-        if not query:
+        tokens = [token for token in query.casefold().split() if token]
+        if not tokens:
             return True
-        return query in f"{favorite.region_id} {favorite.name}".casefold()
+
+        streaming = favorite.name.strip().endswith(STREAMING_NAME_SUFFIX)
+        type_terms: list[str] = []
+        if favorite.geo:
+            type_terms.extend(("virtual virtual location", "virtuell virtuelle virtueller virtuellen standort"))
+        if streaming:
+            type_terms.extend((
+                "streaming streaming optimized streaming-optimized",
+                "streaming optimiert optimierte streaming-optimiert streaming-optimierte",
+            ))
+        if not favorite.geo and not streaming:
+            type_terms.extend(("normal normal location regular", "normal normale normaler normalen standort"))
+        haystack = " ".join((
+            favorite.region_id,
+            favorite.name,
+            *type_terms,
+        )).casefold()
+        return all(token in haystack for token in tokens)
 
     def _favorite_snapshot_display_name(self, favorite: FavoriteRegion) -> str:
         name = favorite.name.strip()
@@ -3346,7 +3603,11 @@ class MainWindow(QMainWindow):
         if virtual:
             lines.append(f"{REGION_VIRTUAL_MARKER} {tr('region.virtual_tooltip')}")
         if streaming:
-            lines.append(f"{REGION_STREAMING_MARKER} {tr('region.streaming_tooltip')}")
+            # Keep the marker legend itself, but no extra explanatory sentence:
+            # unlike virtual hosting, "streaming optimized" is self-explanatory.
+            lines.append(
+                f"{REGION_STREAMING_MARKER} {tr('region.streaming_tooltip')}"
+            )
         return lines
 
     def _region_marker_icon(self, symbol: str, *, accent: bool) -> QIcon:
@@ -3355,11 +3616,23 @@ class MainWindow(QMainWindow):
         pixmap.fill(Qt.GlobalColor.transparent)
 
         painter = QPainter(pixmap)
-        color = (
-            QColor(REGION_MARKER_ACCENT_COLOR)
-            if accent
-            else self.region_combo.palette().color(QPalette.ColorRole.Text)
-        )
+        if accent:
+            color = QColor(REGION_MARKER_ACCENT_COLOR)
+        elif symbol == "☆":
+            palette = self.region_combo.palette()
+            text_color = palette.color(QPalette.ColorRole.Text)
+            base_color = palette.color(QPalette.ColorRole.Base)
+            # Blend toward the list background so inactive stars remain a
+            # clearly secondary, stable neutral grey in both light and dark
+            # themes. The same pixmap is installed for Selected/Active modes
+            # below so Qt cannot recolor every empty star when selection moves.
+            color = QColor(
+                round(text_color.red() * 0.64 + base_color.red() * 0.36),
+                round(text_color.green() * 0.64 + base_color.green() * 0.36),
+                round(text_color.blue() * 0.64 + base_color.blue() * 0.36),
+            )
+        else:
+            color = self.region_combo.palette().color(QPalette.ColorRole.Text)
 
         if symbol == "⚡":
             # Do not rely on the current UI font containing the Unicode
@@ -3392,7 +3665,11 @@ class MainWindow(QMainWindow):
             )
 
         painter.end()
-        return QIcon(pixmap)
+        icon = QIcon()
+        icon.addPixmap(pixmap, QIcon.Mode.Normal, QIcon.State.Off)
+        icon.addPixmap(pixmap, QIcon.Mode.Active, QIcon.State.Off)
+        icon.addPixmap(pixmap, QIcon.Mode.Selected, QIcon.State.Off)
+        return icon
 
     def _add_region_combo_item(
         self,
@@ -3446,11 +3723,12 @@ class MainWindow(QMainWindow):
         if current_data:
             selected_id = str(current_data)
 
-        query = self.search_edit.text().strip().casefold()
+        query = self.search_edit.text().strip()
         filtered = [
             region
             for region in self.regions
-            if not query or query in search_haystack(region)
+            if self._region_matches_filter(region)
+            and region_matches_search(region, query)
         ]
         favorite_ids = {
             favorite.region_id for favorite in self.region_favorites.all()
@@ -3466,6 +3744,7 @@ class MainWindow(QMainWindow):
             favorite
             for favorite in self.region_favorites.all()
             if favorite.region_id not in current_ids
+            and self._favorite_snapshot_matches_filter(favorite)
             and self._favorite_snapshot_matches_query(favorite, query)
         ]
 
@@ -3494,11 +3773,11 @@ class MainWindow(QMainWindow):
                 streaming=favorite_streaming,
             )
 
-        if not query:
+        if not query and self._region_filter_mode == REGION_FILTER_ALL:
             fastest_text = tr("connection.fastest")
             if self.regions and self.regions[0].ping_ms is not None:
                 fastest_text += f" · {self.regions[0].ping_ms:.0f} ms"
-            fastest_icon = self._region_marker_icon("⚡", accent=True)
+            fastest_icon = self._region_marker_icon("⚡", accent=False)
             self.region_combo.addItem(fastest_icon, fastest_text, FASTEST_ID)
             fastest_row = self.region_combo.count() - 1
             self.region_combo.setItemData(
@@ -3608,6 +3887,11 @@ class MainWindow(QMainWindow):
         self._rebuild_tray_menu()
 
     def _confirm_server_switch(self, region: Region) -> bool:
+        if not bool_value(
+            self.settings, "connection/confirm_server_switch", True
+        ):
+            return True
+
         current = self._region_by_id(self._active_region_id)
         current_name = (
             localized_region_name(current, language())
@@ -4679,6 +4963,21 @@ class MainWindow(QMainWindow):
             )
         )
 
+    def _public_info_visible(self) -> bool:
+        return bool_value(self.settings, "ui/show_public_info", True)
+
+    def _apply_public_info_visibility(self) -> None:
+        if not hasattr(self, "ip_caption"):
+            return
+        visible = self._public_info_visible()
+        for widget in (
+            self.ip_caption,
+            self.ip_widget,
+            self.country_caption,
+            self.country_value,
+        ):
+            widget.setVisible(visible)
+
     def _show_suppressed_public_info(self) -> None:
         if self._kill_switch_view_state.mode.value == "blocking":
             self.ip_value.setText("—")
@@ -4799,6 +5098,182 @@ class MainWindow(QMainWindow):
             )
 
         self._run_worker(job, on_success=success, on_failure=failure)
+
+    # ------------------------------------------------------------------
+    # Physical network / underlay monitoring
+    # ------------------------------------------------------------------
+    def _start_network_monitor(self) -> None:
+        """Use ``nmcli monitor`` only as an event trigger.
+
+        The monitor output itself is localized and therefore deliberately not
+        parsed. Every event is debounced and followed by the same numeric
+        NetworkManager device-state query used by the fallback poll.
+        """
+
+        if self._stage4_preview or self._network_monitor is not None:
+            return
+        process = QProcess(self)
+        self._network_monitor = process
+        process.setProgram("nmcli")
+        process.setArguments(["monitor"])
+        process.setProcessChannelMode(QProcess.ProcessChannelMode.MergedChannels)
+        process.readyReadStandardOutput.connect(self._network_monitor_event)
+        process.errorOccurred.connect(self._network_monitor_error)
+        process.start()
+
+    def _stop_network_monitor(self) -> None:
+        process = self._network_monitor
+        self._network_monitor = None
+        if process is None:
+            return
+        if process.state() == QProcess.ProcessState.NotRunning:
+            return
+        process.terminate()
+        if not process.waitForFinished(400):
+            process.kill()
+            process.waitForFinished(400)
+
+    def _network_monitor_event(self) -> None:
+        process = self._network_monitor
+        if process is not None:
+            # Drain the output, but never interpret translated nmcli prose.
+            process.readAllStandardOutput()
+        if self._network_monitor_refresh_pending:
+            return
+        self._network_monitor_refresh_pending = True
+        QTimer.singleShot(100, self._consume_network_monitor_event)
+
+    def _consume_network_monitor_event(self) -> None:
+        self._network_monitor_refresh_pending = False
+        self.update_physical_network_status()
+
+    def _network_monitor_error(self, _error: QProcess.ProcessError) -> None:
+        if self._network_monitor_warning_logged:
+            return
+        self._network_monitor_warning_logged = True
+        self.log("warning", "log.network.monitor_fallback")
+
+    def _physical_network_overlay_state(
+        self,
+        state: KillSwitchViewState,
+        *,
+        connected: bool,
+    ) -> KillSwitchViewState:
+        """Overlay a stale administrative VPN state when the underlay is gone.
+
+        NetworkManager may keep WireGuard administratively active while Wi-Fi
+        or Ethernet is unavailable. Red protection errors always win; otherwise
+        the overlay changes only presentation, not the audited runtime mode.
+        """
+
+        if self._physical_network_available is not False or not connected:
+            return state
+        if state.is_error:
+            return state
+
+        if state.mode.value == "active" and state.protection_guaranteed:
+            return KillSwitchViewState(
+                mode=state.mode,
+                title_key="network.state.unavailable",
+                summary_key="network.summary.protected",
+                detail_key="network.detail.protected",
+                tray_status_key="tray.network_status.protected",
+                tray_tooltip_key="tray.network_tooltip.protected",
+                log_key="log.network.physical_lost",
+                log_level="warning",
+                icon_state="blocking",
+                feature_enabled=state.feature_enabled,
+                firewall_active=state.firewall_active,
+                protection_guaranteed=state.protection_guaranteed,
+                diagnostic=state.diagnostic,
+            )
+
+        if state.mode.value == "vpn_only":
+            return KillSwitchViewState(
+                mode=state.mode,
+                title_key="network.state.unavailable",
+                summary_key="network.summary.unprotected",
+                detail_key="network.detail.unprotected",
+                tray_status_key="tray.network_status.unprotected",
+                tray_tooltip_key="tray.network_tooltip.unprotected",
+                log_key="log.network.physical_lost",
+                log_level="warning",
+                icon_state="ready",
+                feature_enabled=state.feature_enabled,
+                firewall_active=state.firewall_active,
+                protection_guaranteed=state.protection_guaranteed,
+                diagnostic=state.diagnostic,
+            )
+
+        return state
+
+    def _apply_physical_network_overlay(self, *, connected: bool) -> None:
+        state = self._physical_network_overlay_state(
+            self._kill_switch_view_state,
+            connected=connected,
+        )
+        if state is not self._kill_switch_view_state:
+            self._apply_kill_switch_view_state(state, log_transition=False)
+            self.public_info = None
+            self.ip_value.setText("—")
+            self.country_value.setText("—")
+            protection_active = bool(
+                state.protection_guaranteed
+                or (
+                    self._ipv6_guard_status is not None
+                    and self._ipv6_guard_status.protection_active
+                    and not self._ipv6_guard_status_error
+                )
+            )
+            self.ipv6_value.setText(
+                tr("status.ipv6_blocked")
+                if protection_active
+                else tr("common.unknown")
+            )
+            self.dns_value.setText("—")
+
+    def _refresh_public_info_after_network_restore(self) -> None:
+        if self._physical_network_available is not True or self._connection_busy:
+            return
+        try:
+            connected = network_manager.is_connected()
+        except Exception:
+            return
+        if connected:
+            self.refresh_public_info(show_errors=False)
+
+    def update_physical_network_status(self, force: bool = False) -> None:
+        try:
+            available = network_manager.physical_network_available()
+        except Exception:
+            # The existing 3-second VPN state reader remains authoritative for
+            # VPN/firewall safety. A failed underlay query must never fabricate
+            # a network-loss or protection state.
+            return
+
+        previous = self._physical_network_available
+        changed = previous is None or available != previous
+        self._physical_network_available = available
+
+        if changed and previous is not None:
+            if available:
+                self.log("info", "log.network.physical_restored")
+            else:
+                self.public_info = None
+                self.log("warning", "log.network.physical_lost")
+
+        if force or changed:
+            # Re-derive the ordinary VPN/Kill-Switch state first, then apply the
+            # underlay presentation overlay if NetworkManager still calls the
+            # WireGuard profile administratively active.
+            self.update_connection_status(force=True)
+            if not available and bool(self._last_connected_state):
+                if self._kill_switch_view_state.protection_guaranteed:
+                    self.log("ok", "log.network.protection_retained")
+                else:
+                    self.log("warning", "log.network.vpn_waiting")
+            if available and previous is False and bool(self._last_connected_state):
+                QTimer.singleShot(1500, self._refresh_public_info_after_network_restore)
 
     def update_connection_status(self, force: bool = False) -> None:
         # During an intentional disconnect the worker deliberately moves through
@@ -4955,6 +5430,12 @@ class MainWindow(QMainWindow):
             else:
                 self.public_info = None
 
+        # NetworkManager can keep WireGuard administratively active while its
+        # physical underlay is gone. Keep the audited runtime state intact, but
+        # replace stale Green/Blue presentation with the Stage 5A underlay
+        # overlay until a physical path is available again.
+        self._apply_physical_network_overlay(connected=connected)
+
         self._update_controls()
         if force or changed:
             self._rebuild_tray_menu()
@@ -4976,32 +5457,53 @@ class MainWindow(QMainWindow):
             if network_state_known
             else self.kill_switch_runtime.feature_enabled
         )
+        physical_network_ready = self._physical_network_available is not False
         self.connection_button.setEnabled(
             network_state_known
             and not busy
-            and (has_regions or connected or disconnected_lock)
+            and (
+                connected
+                or disconnected_lock
+                or (has_regions and physical_network_ready)
+            )
         )
         self.region_combo.setEnabled(
             network_state_known
+            and physical_network_ready
             and not busy
             and has_regions
             and (connected or not disconnected_lock)
         )
         self.search_edit.setEnabled(
             network_state_known
+            and physical_network_ready
             and not busy
             and has_regions
             and (connected or not disconnected_lock)
         )
-        self.reload_button.setEnabled(not busy)
-        self.ping_button.setEnabled(not busy and has_regions)
+        self.reload_button.setEnabled(not busy and physical_network_ready)
+        self.ping_button.setEnabled(not busy and has_regions and physical_network_ready)
+        public_info_visible = self._public_info_visible()
         self.ip_refresh_button.setEnabled(
-            network_state_known and not self._public_info_busy and not disconnected_lock
+            public_info_visible
+            and network_state_known
+            and physical_network_ready
+            and not self._public_info_busy
+            and not disconnected_lock
         )
-        self.reload_action.setEnabled(not busy)
-        self.ping_action.setEnabled(not busy and has_regions)
+        self.ip_action.setEnabled(
+            public_info_visible
+            and network_state_known
+            and physical_network_ready
+            and not self._public_info_busy
+            and not disconnected_lock
+        )
+        self.reload_action.setEnabled(not busy and physical_network_ready)
+        self.ping_action.setEnabled(not busy and has_regions and physical_network_ready)
         self.toggle_vpn_action.setEnabled(
-            network_state_known and not self._connection_busy
+            network_state_known
+            and not self._connection_busy
+            and (connected or disconnected_lock or physical_network_ready)
         )
         self.kill_switch_action.setEnabled(
             network_state_known and not busy and not connected
@@ -5018,6 +5520,9 @@ class MainWindow(QMainWindow):
     # Public network information
     # ------------------------------------------------------------------
     def refresh_public_info(self, *, show_errors: bool) -> None:
+        if not self._public_info_visible():
+            self.public_info = None
+            return
         if self._public_info_busy:
             return
         if self._disconnected_kill_switch_may_block():
@@ -5119,7 +5624,10 @@ class MainWindow(QMainWindow):
         )
 
         state = self._kill_switch_view_state
-        if connected:
+        physical_network_ready = self._physical_network_available is not False
+        if connected and not physical_network_ready:
+            tray_status_text = tr("tray.status_network_unavailable")
+        elif connected:
             active_region = self._region_by_id(self._active_region_id)
             active_name = (
                 localized_region_name(active_region, language())
@@ -5162,7 +5670,10 @@ class MainWindow(QMainWindow):
                         else "connection.recheck_protection"
                     )
                 )
-                connect_action.setEnabled(not self._connection_busy)
+                connect_action.setEnabled(
+                    not self._connection_busy
+                    and (physical_network_ready or not reconnect_ready)
+                )
                 if reconnect_ready:
                     connect_action.triggered.connect(
                         lambda checked=False: self._start_protected_reconnect(
@@ -5194,7 +5705,9 @@ class MainWindow(QMainWindow):
                                 region=localized_region_name(last_region, language()),
                             )
                         )
-                    connect_action.setEnabled(not self._connection_busy)
+                    connect_action.setEnabled(
+                        not self._connection_busy and physical_network_ready
+                    )
                     connect_action.triggered.connect(
                         lambda checked=False, region=last_region: self.connect_region(region)
                     )
@@ -5206,6 +5719,7 @@ class MainWindow(QMainWindow):
         locations_menu.setIcon(tray_menu_icon("locations"))
         locations_menu.setEnabled(
             network_state_known
+            and physical_network_ready
             and bool(self.regions)
             and not self._connection_busy
             and not disconnected_lock
@@ -5214,7 +5728,7 @@ class MainWindow(QMainWindow):
         fastest = self._selected_fastest_region()
         if fastest is not None:
             fastest_action = QAction(
-                f"⚡ {tr('connection.fastest')}"
+                tr("connection.fastest")
                 + (
                     f" · {fastest.ping_ms:.0f} ms"
                     if fastest.ping_ms is not None
@@ -5222,6 +5736,7 @@ class MainWindow(QMainWindow):
                 ),
                 locations_menu,
             )
+            fastest_action.setIcon(tray_menu_icon("fastest"))
             fastest_action.triggered.connect(
                 lambda checked=False, region=fastest: self.connect_region(region)
             )
@@ -5254,6 +5769,7 @@ class MainWindow(QMainWindow):
             menu,
             enabled=(
                 network_state_known
+                and physical_network_ready
                 and not self._connection_busy
                 and not disconnected_lock
             ),
@@ -5513,6 +6029,7 @@ class MainWindow(QMainWindow):
     def _final_quit(self) -> None:
         self._close_kill_switch_session()
         self._close_ipv6_guard_session()
+        self._stop_network_monitor()
         self._allow_close = True
         self.tray.hide()
         self.status_timer.stop()
@@ -5533,14 +6050,6 @@ class MainWindow(QMainWindow):
         if tray_enabled and self.tray.isVisible():
             event.ignore()
             self.hide()
-            if not self._close_hint_shown:
-                self._close_hint_shown = True
-                self.tray.showMessage(
-                    tr("tray.hidden_title"),
-                    tr("tray.hidden_message"),
-                    QSystemTrayIcon.MessageIcon.Information,
-                    5000,
-                )
             return
 
         event.ignore()

@@ -37,7 +37,7 @@ class Stage4B1PolishStaticTests(unittest.TestCase):
 
     def test_main_window_width_is_reduced_without_height_change(self) -> None:
         source = GUI.read_text(encoding="utf-8")
-        self.assertIn("COMPACT_SIZE = QSize(740, 510)", source)
+        self.assertIn("COMPACT_SIZE = QSize(690, 510)", source)
         self.assertIn("LOG_SIZE = QSize(760, 780)", source)
 
     def test_live_log_wraps_and_has_no_horizontal_scrollbar(self) -> None:

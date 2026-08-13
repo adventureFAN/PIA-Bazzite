@@ -166,7 +166,11 @@ _TRAY_MENU_THEME_NAMES = {
     "locations": ("network-vpn", "network-server"),
     "favorites": ("emblem-favorite", "bookmarks"),
     "show": ("view-restore", "window-new"),
-    "quit": ("application-exit", "system-log-out"),
+    # Fastest and Quit intentionally use our neutral vector icons below.
+    # Plasma's semantic process/exit icons may be yellow/red, while these
+    # actions are ordinary menu choices rather than warning/error states.
+    "fastest": (),
+    "quit": (),
 }
 
 
@@ -223,6 +227,18 @@ def _tray_menu_fallback_icon(role: str, size: int = 18) -> QIcon:
             int(size * 0.16), int(size * 0.22), int(size * 0.68), int(size * 0.56), 2, 2
         )
         painter.drawLine(int(size * 0.16), int(size * 0.36), int(size * 0.84), int(size * 0.36))
+    elif role == "fastest":
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(color)
+        bolt = QPainterPath()
+        bolt.moveTo(size * 0.58, size * 0.06)
+        bolt.lineTo(size * 0.24, size * 0.53)
+        bolt.lineTo(size * 0.47, size * 0.53)
+        bolt.lineTo(size * 0.35, size * 0.94)
+        bolt.lineTo(size * 0.76, size * 0.42)
+        bolt.lineTo(size * 0.54, size * 0.42)
+        bolt.closeSubpath()
+        painter.drawPath(bolt)
     elif role == "quit":
         painter.drawLine(size // 2, int(size * 0.10), size // 2, int(size * 0.50))
         painter.drawArc(int(size * 0.18), int(size * 0.18), int(size * 0.64), int(size * 0.68), 35 * 16, 290 * 16)
