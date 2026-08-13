@@ -497,5 +497,11 @@
   "options.public_info_provider_tooltip": "Online service used to determine the public IP address and detected country. The service can see the public IP address during the lookup.",
   "options.provider.freeipapi": "FreeIPAPI",
   "options.provider.geojs": "GeoJS (Default)",
-  "options.provider.ipwhois": "ipwho.is"
+  "options.provider.ipwhois": "ipwho.is",
+  "options.auto_connect": "Connect automatically:",
+  "options.auto_connect_tooltip": "Chooses whether and which location PIA Bazzite should connect to automatically at startup.\n\nThe actual automatic startup connection will be enabled in a following 0.7 stage.",
+  "options.auto_connect.off": "Off",
+  "options.auto_connect.last": "Last selected location",
+  "options.auto_connect.favorites": "Favorites",
+  "options.auto_connect.unavailable": "Saved location unavailable: {region}"
 }

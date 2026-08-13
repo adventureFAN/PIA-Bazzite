@@ -1,9 +1,9 @@
 # PIA Bazzite - Living HANDOFF
 
 **Purpose:** Continuity document for future ChatGPT conversations and later PIA Bazzite development.
-**Last updated:** 2026-08-12
+**Last updated:** 2026-08-13
 **Current public stable release:** **PIA Bazzite 0.6.0**
-**Current development baseline:** **0.7.0 development — Stage 1 verified; Stage 2 server favorites fully verified; Stage 3A Options-window foundation verified; Stage 3B public-network provider core verified; Stage 3C online provider selection verified**
+**Current development baseline:** **0.7.0 development — Stage 1 verified; Stage 2 server favorites fully verified; Stage 3A–3D verified; Stage 4A Auto-Connect Options foundation verified; Stage 4B startup execution next**
 **Stable release tag:** `v0.6.0`
 **Stable release commit:** `4df051f` (`feat: prepare PIA Bazzite 0.6.0 release`)
 **Repository:** https://github.com/adventureFAN/PIA-Bazzite
@@ -509,7 +509,17 @@ Current candidate roadmap, not promises:
 - Focused coverage is `tests/ui/test_server_markers_stage3d.py`; the final focused gate is 9/9 PASS. The relevant inherited tray/runtime coverage passes, the authoritative unprivileged Stage-8C.2 release gate passes, and real Bazzite verification confirms the final `●`/`▶` appearance, simplified QuickInfo, compact tray labels, and removal of the redundant tray status dot. Treat Stage 3D as verified and frozen.
 
 - **0.6.1:** only if real bugs/hardening/maintenance items accumulate; do not release solely for the reboot-scope README clarification.
-- **0.7.x current sequence:** Stage 3A Options-window foundation, Stage 3B provider-core/real-location comparison, Stage 3C selectable online providers, and Stage 3D compact server-marker/tray polish are complete and verified. GeoJS is the verified 0.7 default after the Nigeria virtual-location discriminator, with FreeIPAPI and ipwho.is available as maintained user-selectable alternatives. The local IPinfo Lite/Automatic design was consciously rejected as disproportionate complexity for this feature. Auto-Connect and improved network-change handling remain later candidates. Server Favorites are complete and verified.
+**Stage 4A verified — Auto-Connect Options foundation (2026-08-13):**
+
+- Auto-Connect begins as an ordinary, non-privileged persistent preference only. Stage 4A **does not** start a VPN automatically, request Polkit, alter NetworkManager, touch the Session Kill Switch, or change A13 clean-start behavior. Real startup execution belongs to Stage 4B.
+- UX is intentionally one selector rather than a checkbox plus second selector: `Off`, `Last selected location`, then current Favorites, `Fastest location`, then the remaining current catalog sorted by ping. Favorite/current-server labels reuse the compact Stage 3D `●`/`▶` marker wording.
+- Favorite choices use the same yellow/gold star icon as the main server selector, and `Fastest location` uses the same yellow/gold vector lightning icon. The popup is capped at roughly 20 visible rows and then scrolls, matching the compact behavior of the main server chooser.
+- The Auto-Connect QuickInfo is deliberately two paragraphs: the first explains what the preference selects; the second makes clear that Stage 4A only stores the preference and that actual startup connection comes in a later 0.7 stage.
+- A fixed-location Auto-Connect choice stores only the PIA `region_id` (`region:<id>`), never endpoint IP/hostname/ping data. If that exact region disappears from the current PIA catalog, keep the saved choice visible but disabled and **do not silently fall back to another country/location**. `Fastest` is the only mode that intentionally chooses a different region dynamically.
+- Real Bazzite verification passed for the fixed-size Options layout, selector ordering, favorite grouping, yellow favorite/fastest icons, approximately 20-row scroll cap, marker rendering, QuickInfo paragraph break, Save/Cancel behavior, and persisted selection. The selector remains preference-only and caused no startup connection or authorization prompt during Stage 4A testing.
+- Focused coverage is `tests/ui/test_auto_connect_options_stage4a_07.py`; `tools/0.7-stage4a-auto-connect-options-self-test.sh` reruns the verified Stage 3A/3C/3D UI invariants. Final focused gate: **35/35 PASS**. The authoritative unprivileged Stage-8C.2 release gate also passes. Treat Stage 4A as verified and frozen.
+
+- **0.7.x current sequence:** Stage 3A Options-window foundation, Stage 3B provider-core/real-location comparison, Stage 3C selectable online providers, Stage 3D compact server-marker/tray polish, and Stage 4A Auto-Connect preference foundation are complete and verified. GeoJS is the verified 0.7 default after the Nigeria virtual-location discriminator, with FreeIPAPI and ipwho.is available as maintained user-selectable alternatives. The local IPinfo Lite/Automatic design was consciously rejected as disproportionate complexity for this feature. **Stage 4B is next: execute the stored Auto-Connect preference safely during startup without regressing A13 or Session Kill Switch recovery.** Improved network-change handling remains a later 0.7 candidate. Server Favorites are complete and verified.
 - **0.8.x candidates:** trusted networks and an optional, carefully tested local-LAN access exception for the Kill Switch.
 - **0.9.x candidate:** PIA port forwarding on supported regions.
 - **Later / high risk:** per-app split tunneling. Treat it as a routing/security project comparable in complexity to the Kill Switch, not a small checkbox.
@@ -1516,3 +1526,4 @@ Update this file whenever a future release changes architecture, support status,
 
 Keep historical evidence when it explains why a current invariant exists, but always update the **Current release state**, **Source of truth**, **Known limitations**, **Future development stance**, and **Quick do-not-regress checklist** so old stage language cannot be mistaken for the present state.
 
+- Stage 4A UI polish candidate: the auto-connect selector shows gold icon markers for Favorites and Fastest Location, limits the popup to about 20 visible rows with scrolling for the rest, and separates the explanatory QuickInfo into two paragraphs. The stage remains preference-only; startup auto-connect is still deferred to Stage 4B.

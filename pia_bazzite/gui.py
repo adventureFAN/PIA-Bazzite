@@ -115,6 +115,11 @@ from .ipv6_guard_lifecycle import (
     IPv6GuardLifecycleError,
     IPv6GuardStartupError,
 )
+from .auto_connect import (
+    AUTO_CONNECT_KEY,
+    AUTO_CONNECT_OFF,
+    normalize_auto_connect_target,
+)
 from .models import PublicNetworkInfo, Region, SystemCheck
 from .network_paths import discover_physical_interface
 from .network_probes import NetworkProbeBaseline, NetworkProbeError
@@ -2173,7 +2178,12 @@ class MainWindow(QMainWindow):
             self._rebuild_tray_menu()
 
     def show_options(self) -> None:
-        dialog = OptionsDialog(self.settings, self)
+        dialog = OptionsDialog(
+            self.settings,
+            self,
+            regions=self.regions,
+            favorites=self.region_favorites.all(),
+        )
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
 
@@ -2191,6 +2201,9 @@ class MainWindow(QMainWindow):
                 DEFAULT_ONLINE_PUBLIC_NETWORK_PROVIDER,
             )
         )
+        current_auto_connect_target = normalize_auto_connect_target(
+            self.settings.value(AUTO_CONNECT_KEY, AUTO_CONNECT_OFF)
+        )
 
         if values.language_code != language():
             self.change_language(values.language_code)
@@ -2202,6 +2215,13 @@ class MainWindow(QMainWindow):
             self._tray_setting_changed(values.tray_enabled)
         if values.public_network_provider != current_public_network_provider:
             self.change_public_network_provider(values.public_network_provider)
+        if values.auto_connect_target != current_auto_connect_target:
+            self.change_auto_connect_target(values.auto_connect_target)
+
+    def change_auto_connect_target(self, target: str) -> None:
+        normalized = normalize_auto_connect_target(target)
+        self.settings.setValue(AUTO_CONNECT_KEY, normalized)
+        self.settings.sync()
 
     def change_public_network_provider(self, provider_id: str) -> None:
         normalized = normalize_online_public_network_provider(provider_id)

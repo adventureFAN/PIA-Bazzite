@@ -497,5 +497,11 @@
   "options.public_info_provider_tooltip": "Online-Dienst zur Ermittlung der öffentlichen IP-Adresse und des erkannten Landes. Der Dienst sieht dabei die öffentliche IP-Adresse.",
   "options.provider.freeipapi": "FreeIPAPI",
   "options.provider.geojs": "GeoJS (Standard)",
-  "options.provider.ipwhois": "ipwho.is"
+  "options.provider.ipwhois": "ipwho.is",
+  "options.auto_connect": "Automatisch verbinden:",
+  "options.auto_connect_tooltip": "Legt fest, ob und mit welchem Standort PIA Bazzite beim Start automatisch verbinden soll.\n\nDie eigentliche automatische Verbindung wird in einer folgenden 0.7-Etappe aktiviert.",
+  "options.auto_connect.off": "Aus",
+  "options.auto_connect.last": "Zuletzt ausgewählter Standort",
+  "options.auto_connect.favorites": "Favoriten",
+  "options.auto_connect.unavailable": "Gespeicherter Standort nicht verfügbar: {region}"
 }
