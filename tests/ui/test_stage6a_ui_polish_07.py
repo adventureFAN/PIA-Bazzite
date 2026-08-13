@@ -129,7 +129,7 @@ class Stage6AUiPolishTests(unittest.TestCase):
         # Options: favorite status stays gold; Fastest and Off are neutral.
         self.assertIn('self._auto_connect_marker_icon("★", accent=True)', self.options)
         self.assertIn('self._auto_connect_marker_icon("⚡", accent=False)', self.options)
-        self.assertIn('"off": ()', self.options)
+        self.assertIn("def _auto_connect_palette_icon", self.options)
 
         # Tray: Fastest is an icon rather than an emoji-glyph text marker and
         # Quit deliberately bypasses Plasma's commonly red semantic icon.

@@ -390,36 +390,74 @@ class OptionsDialog(QDialog):
             )
             self._set_combo_item_enabled(combo, combo.count() - 1, False)
 
+    def _auto_connect_palette_icon(
+        self,
+        draw_pixmap,
+        *,
+        accent: bool = False,
+    ) -> QIcon:
+        """Build an Auto-Connect icon that follows the current Qt palette.
+
+        PIA Bazzite can use Light/Dark independently from Plasma.  A raw
+        ``QIcon.fromTheme()`` can therefore keep the desktop theme's white
+        symbolic pixels inside our Light popup.  Render our tiny mode icons
+        ourselves and provide explicit Normal/Selected/Disabled pixmaps so
+        Breeze always gets the right contrast.
+        """
+
+        palette = self.auto_connect_combo.palette()
+        if accent:
+            normal_color = QColor(AUTO_CONNECT_ACCENT_COLOR)
+            selected_color = QColor(AUTO_CONNECT_ACCENT_COLOR)
+            disabled_color = QColor(AUTO_CONNECT_ACCENT_COLOR)
+        else:
+            normal_color = palette.color(QPalette.ColorRole.Text)
+            selected_color = palette.color(QPalette.ColorRole.HighlightedText)
+            disabled_color = palette.color(
+                QPalette.ColorGroup.Disabled,
+                QPalette.ColorRole.Text,
+            )
+
+        def render(color: QColor) -> QPixmap:
+            pixmap = QPixmap(self.auto_connect_combo.iconSize())
+            pixmap.fill(Qt.GlobalColor.transparent)
+            painter = QPainter(pixmap)
+            draw_pixmap(painter, pixmap, color)
+            painter.end()
+            return pixmap
+
+        normal = render(normal_color)
+        selected = render(selected_color)
+        disabled = render(disabled_color)
+        icon = QIcon()
+        icon.addPixmap(normal, QIcon.Mode.Normal, QIcon.State.Off)
+        icon.addPixmap(normal, QIcon.Mode.Active, QIcon.State.Off)
+        icon.addPixmap(selected, QIcon.Mode.Selected, QIcon.State.Off)
+        icon.addPixmap(disabled, QIcon.Mode.Disabled, QIcon.State.Off)
+        return icon
+
     def _auto_connect_marker_icon(self, symbol: str, *, accent: bool) -> QIcon:
         """Draw favorite status in gold and special-mode icons neutrally."""
 
-        size = self.auto_connect_combo.iconSize()
-        pixmap = QPixmap(size)
-        pixmap.fill(Qt.GlobalColor.transparent)
+        def draw(painter: QPainter, pixmap: QPixmap, color: QColor) -> None:
+            size = pixmap.size()
+            if symbol == "⚡":
+                # Keep the bolt independent of font/emoji fallback, matching
+                # the main selector's vector lightning icon.
+                painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+                width = float(size.width())
+                height = float(size.height())
+                bolt = QPainterPath()
+                bolt.moveTo(width * 0.58, height * 0.06)
+                bolt.lineTo(width * 0.24, height * 0.53)
+                bolt.lineTo(width * 0.47, height * 0.53)
+                bolt.lineTo(width * 0.35, height * 0.94)
+                bolt.lineTo(width * 0.76, height * 0.42)
+                bolt.lineTo(width * 0.54, height * 0.42)
+                bolt.closeSubpath()
+                painter.fillPath(bolt, color)
+                return
 
-        painter = QPainter(pixmap)
-        color = (
-            QColor(AUTO_CONNECT_ACCENT_COLOR)
-            if accent
-            else self.palette().color(QPalette.ColorRole.Text)
-        )
-
-        if symbol == "⚡":
-            # Keep the bolt independent of font/emoji fallback, matching the
-            # main server selector's deliberately vector-drawn lightning icon.
-            painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-            width = float(size.width())
-            height = float(size.height())
-            bolt = QPainterPath()
-            bolt.moveTo(width * 0.58, height * 0.06)
-            bolt.lineTo(width * 0.24, height * 0.53)
-            bolt.lineTo(width * 0.47, height * 0.53)
-            bolt.lineTo(width * 0.35, height * 0.94)
-            bolt.lineTo(width * 0.76, height * 0.42)
-            bolt.lineTo(width * 0.54, height * 0.42)
-            bolt.closeSubpath()
-            painter.fillPath(bolt, color)
-        else:
             painter.setRenderHint(QPainter.RenderHint.TextAntialiasing, True)
             font = QFont(self.auto_connect_combo.font())
             font.setBold(True)
@@ -432,39 +470,29 @@ class OptionsDialog(QDialog):
                 symbol,
             )
 
-        painter.end()
-        return QIcon(pixmap)
+        return self._auto_connect_palette_icon(draw, accent=accent)
 
     def _auto_connect_mode_icon(self, role: str) -> QIcon:
-        """Return a neutral icon for non-server Auto-Connect modes."""
+        """Return a palette-aware neutral icon for Auto-Connect modes."""
 
-        theme_names = {
-            # Off is intentionally drawn with the neutral fallback below:
-            # Plasma's process-stop/dialog-cancel icons are commonly red.
-            "off": (),
-            "last": ("view-refresh", "view-history", "edit-redo"),
-        }
-        for name in theme_names.get(role, ()):
-            icon = QIcon.fromTheme(name)
-            if not icon.isNull():
-                return icon
+        def draw(painter: QPainter, pixmap: QPixmap, color: QColor) -> None:
+            size = pixmap.size()
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
 
-        size = self.auto_connect_combo.iconSize()
-        pixmap = QPixmap(size)
-        pixmap.fill(Qt.GlobalColor.transparent)
+            if role == "off":
+                # Deliberately not Plasma's process-stop/dialog-cancel icon:
+                # Auto-Connect Off is a neutral mode, not a destructive action.
+                side = min(size.width(), size.height()) * 0.48
+                x = (size.width() - side) / 2
+                y = (size.height() - side) / 2
+                painter.setPen(Qt.PenStyle.NoPen)
+                painter.setBrush(color)
+                painter.drawRoundedRect(int(x), int(y), int(side), int(side), 2, 2)
+                return
 
-        painter = QPainter(pixmap)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-        color = self.palette().color(QPalette.ColorRole.Text)
-
-        if role == "off":
-            side = min(size.width(), size.height()) * 0.48
-            x = (size.width() - side) / 2
-            y = (size.height() - side) / 2
-            painter.setPen(Qt.PenStyle.NoPen)
-            painter.setBrush(color)
-            painter.drawRoundedRect(int(x), int(y), int(side), int(side), 2, 2)
-        else:
+            # Draw the Last-selected repeat/history glyph ourselves instead of
+            # taking a symbolic icon from the *desktop* theme.  This keeps it
+            # dark in PIA Bazzite Light mode even when Plasma itself is dark.
             pen = QPen(color, max(1.5, size.height() * 0.10))
             pen.setCapStyle(Qt.PenCapStyle.RoundCap)
             pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
@@ -488,8 +516,7 @@ class OptionsDialog(QDialog):
                 int(size.height() * 0.39),
             )
 
-        painter.end()
-        return QIcon(pixmap)
+        return self._auto_connect_palette_icon(draw)
 
     @staticmethod
     def _region_ping_sort_key(region: Region) -> tuple[bool, float, str]:

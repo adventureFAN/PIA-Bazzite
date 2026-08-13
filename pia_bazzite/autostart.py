@@ -69,7 +69,15 @@ def current_autostart_command() -> tuple[str, ...]:
         argv0 = (Path.cwd() / argv0).resolve()
     else:
         argv0 = argv0.resolve()
-    return (str(Path(sys.executable).resolve()), str(argv0), AUTOSTART_ARGUMENT)
+
+    # Preserve the launcher path exactly enough to keep a source/development
+    # virtual environment active.  Resolving sys.executable here dereferences
+    # .venv/bin/python -> /usr/bin/pythonX.Y and silently drops the venv's
+    # site-packages when the desktop autostart entry runs after login.
+    python_launcher = Path(sys.executable).expanduser()
+    if not python_launcher.is_absolute():
+        python_launcher = Path.cwd() / python_launcher
+    return (str(python_launcher), str(argv0), AUTOSTART_ARGUMENT)
 
 
 def autostart_enabled(path: Path | None = None) -> bool:

@@ -1,8 +1,10 @@
 # Changelog
+- Stage 7D.3 release-regression hotfix candidate: source/development XDG autostart now preserves the active `.venv/bin/python` launcher instead of resolving its symlink to the system Python, which previously caused login autostart to fail with missing venv dependencies such as PySide6. AppImage autostart behavior is unchanged.
 
 All notable changes to PIA Bazzite are documented in this file.
 
 ## [Unreleased]
+- Stage 7B.3 release-candidate polish: Auto-Connect special-mode icons are now rendered from the active PIA Bazzite palette instead of reusing desktop-theme symbolic pixels, preventing white icons from disappearing in the app's Light mode when Plasma itself uses a dark icon theme. Gold remains reserved for actual favorites.
 - Stage 6 UI polish is verified on real Bazzite: the compact main window, location search/type filter, semantic marker tooltips, consistent favorite/action icon treatment, tabbed Options redesign, robust KDE/Breeze two-column layout, `Netzwerk & Datenschutz` mnemonic escaping, and removal of the minimize-to-tray notification were visually accepted. Plasma 125%/150% scaling remains a Stage 7 release-validation check.
 
 ### Added
