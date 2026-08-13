@@ -414,6 +414,8 @@
   "quit.title": "Exit PIA Bazzite",
   "region.streaming": "Streaming optimized",
   "region.virtual_suffix": "virtual location",
+  "region.virtual_tooltip": "Virtual location",
+  "region.streaming_tooltip": "Streaming-optimized location",
   "server_switch.confirm_message": "Do you want to switch from {current} to {target}?\n\nThe VPN tunnel will be disconnected briefly. With the Kill Switch enabled, normal internet access remains blocked throughout the transition.",
   "server_switch.confirm_title": "Switch VPN server?",
   "single_instance.message": "The existing PIA Bazzite window has been opened.",

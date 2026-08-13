@@ -245,7 +245,8 @@ class Stage4CRuntimeStaticTests(unittest.TestCase):
     def test_tray_uses_same_runtime_state_as_main_window(self) -> None:
         source = GUI.read_text(encoding="utf-8")
         self.assertIn("status_action = QAction(tr(state.tray_status_key), menu)", source)
-        self.assertIn("status_dot_icon(state.icon_state)", source)
+        self.assertIn("self.tray.setIcon(status_icon(state.icon_state))", source)
+        self.assertNotIn("status_action.setIcon(status_dot_icon", source)
         self.assertIn("self.tray.setToolTip(tr(state.tray_tooltip_key))", source)
 
     def test_runtime_preview_is_network_and_privilege_free(self) -> None:

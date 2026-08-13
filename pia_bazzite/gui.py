@@ -61,7 +61,7 @@ from .helper_installation import (
     HelperInstallationState,
     PackagedHelperManager,
 )
-from .icons import status_dot_icon, status_icon, system_status_icon
+from .icons import status_icon, system_status_icon
 from .logging_utils import mask_ip_address, redact_secrets
 from .kill_switch_client import (
     AuthorizationDeniedError,
@@ -137,9 +137,14 @@ from .region_favorites import (
     FavoriteRegionStore,
 )
 from .region_names import (
+    REGION_STREAMING_MARKER,
+    REGION_VIRTUAL_MARKER,
+    STREAMING_NAME_SUFFIX,
+    compact_region_display_name,
     localized_region_name,
     public_country_name,
     region_display_name,
+    region_is_streaming,
     search_haystack,
 )
 from .settings import bool_value, cache_dir, crash_recovery_path, state_dir
@@ -3137,11 +3142,32 @@ class MainWindow(QMainWindow):
         return query in f"{favorite.region_id} {favorite.name}".casefold()
 
     def _favorite_snapshot_display_name(self, favorite: FavoriteRegion) -> str:
-        name = favorite.name
+        name = favorite.name.strip()
+        streaming = name.endswith(STREAMING_NAME_SUFFIX)
+        if streaming:
+            name = name[:-len(STREAMING_NAME_SUFFIX)].strip()
+
+        markers: list[str] = []
         if favorite.geo:
-            geo_text = "virtueller Standort" if language() == "de" else "virtual location"
-            name = f"{name} ({geo_text})"
+            markers.append(REGION_VIRTUAL_MARKER)
+        if streaming:
+            markers.append(REGION_STREAMING_MARKER)
+        if markers:
+            name = f"{name} {' '.join(markers)}"
         return name
+
+    def _region_marker_tooltip_lines(
+        self,
+        *,
+        virtual: bool,
+        streaming: bool,
+    ) -> list[str]:
+        lines: list[str] = []
+        if virtual:
+            lines.append(f"{REGION_VIRTUAL_MARKER} {tr('region.virtual_tooltip')}")
+        if streaming:
+            lines.append(f"{REGION_STREAMING_MARKER} {tr('region.streaming_tooltip')}")
+        return lines
 
     def _region_marker_icon(self, symbol: str, *, accent: bool) -> QIcon:
         size = self.region_combo.iconSize()
@@ -3195,6 +3221,8 @@ class MainWindow(QMainWindow):
         region_id: str,
         favorite: bool,
         available: bool,
+        virtual: bool = False,
+        streaming: bool = False,
     ) -> None:
         star = "★" if favorite else "☆"
         icon = self._region_marker_icon(star, accent=favorite)
@@ -3202,18 +3230,17 @@ class MainWindow(QMainWindow):
         row = self.region_combo.count() - 1
         self.region_combo.setItemData(row, True, REGION_FAVORITE_TOGGLE_ROLE)
         self.region_combo.set_region_row_available(row, available)
-        if available:
-            tooltip_key = (
-                "favorites.remove_tooltip"
-                if favorite
-                else "favorites.add_tooltip"
-            )
-            tooltip = tr(tooltip_key)
-        else:
-            tooltip = tr("favorites.unavailable_tooltip")
+        marker_lines = self._region_marker_tooltip_lines(
+            virtual=virtual,
+            streaming=streaming,
+        )
+        tooltip_lines = list(marker_lines)
+        if not available:
+            tooltip_lines.append(tr("favorites.unavailable_tooltip"))
+
         self.region_combo.setItemData(
             row,
-            tooltip,
+            "\n".join(tooltip_lines) if tooltip_lines else None,
             Qt.ItemDataRole.ToolTipRole,
         )
 
@@ -3267,19 +3294,24 @@ class MainWindow(QMainWindow):
 
         for region in favorite_regions:
             self._add_region_combo_item(
-                text=region_display_name(region, language()),
+                text=compact_region_display_name(region, language()),
                 region_id=region.region_id,
                 favorite=True,
                 available=True,
+                virtual=region.geo,
+                streaming=region_is_streaming(region),
             )
 
         for favorite in missing_favorites:
             unavailable = tr("favorites.unavailable_suffix")
+            favorite_streaming = favorite.name.strip().endswith(STREAMING_NAME_SUFFIX)
             self._add_region_combo_item(
                 text=f"{self._favorite_snapshot_display_name(favorite)} · {unavailable}",
                 region_id=favorite.region_id,
                 favorite=True,
                 available=False,
+                virtual=favorite.geo,
+                streaming=favorite_streaming,
             )
 
         if not query:
@@ -3297,10 +3329,12 @@ class MainWindow(QMainWindow):
 
         for region in normal_regions:
             self._add_region_combo_item(
-                text=region_display_name(region, language()),
+                text=compact_region_display_name(region, language()),
                 region_id=region.region_id,
                 favorite=False,
                 available=True,
+                virtual=region.geo,
+                streaming=region_is_streaming(region),
             )
 
         target_index = self.region_combo.findData(selected_id)
@@ -3378,10 +3412,12 @@ class MainWindow(QMainWindow):
             if active_region is None:
                 return
             self._add_region_combo_item(
-                text=region_display_name(active_region, language()),
+                text=compact_region_display_name(active_region, language()),
                 region_id=active_region.region_id,
                 favorite=self.region_favorites.is_favorite(active_region.region_id),
                 available=True,
+                virtual=active_region.geo,
+                streaming=region_is_streaming(active_region),
             )
             index = self.region_combo.count() - 1
         self._region_selection_guard = True
@@ -4872,7 +4908,6 @@ class MainWindow(QMainWindow):
             menu = QMenu()
             state = self._kill_switch_view_state
             status_action = QAction(tr(state.tray_status_key), menu)
-            status_action.setIcon(status_dot_icon(state.icon_state))
             status_action.setEnabled(False)
             menu.addAction(status_action)
             menu.addSeparator()
@@ -4913,9 +4948,9 @@ class MainWindow(QMainWindow):
         else:
             tray_status_text = tr("tray.status_disconnected")
         status_action = QAction(tray_status_text, menu)
-        status_action.setIcon(status_dot_icon(state.icon_state))
-        # Indicator only: one colored icon, no duplicate text bullet, and no
-        # click action.
+        # Informational status row only. The real tray icon already carries
+        # the connection/Kill-Switch state color, so this disabled row has no
+        # separate status-dot icon.
         status_action.setEnabled(False)
         menu.addAction(status_action)
         menu.addSeparator()
@@ -5016,7 +5051,7 @@ class MainWindow(QMainWindow):
             ][:20]
             for region in reachable:
                 action = QAction(
-                    region_display_name(region, language()),
+                    compact_region_display_name(region, language()),
                     locations_menu,
                 )
                 action.triggered.connect(
@@ -5083,7 +5118,7 @@ class MainWindow(QMainWindow):
 
         for region in available_regions:
             action = QAction(
-                region_display_name(region, language()),
+                compact_region_display_name(region, language()),
                 favorites_menu,
             )
             action.setIcon(self._region_marker_icon("★", accent=True))

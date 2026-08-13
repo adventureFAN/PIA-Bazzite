@@ -102,6 +102,11 @@ SPECIAL_LOCATIONS = {
 }
 
 
+STREAMING_NAME_SUFFIX = " Streaming Optimized"
+REGION_VIRTUAL_MARKER = "●"
+REGION_STREAMING_MARKER = "▶"
+
+
 def country_name(code: str, language_code: str) -> str:
     pair = COUNTRIES.get(code.upper())
     if not pair:
@@ -111,9 +116,9 @@ def country_name(code: str, language_code: str) -> str:
 
 def localized_region_name(region: Region, language_code: str) -> str:
     name = region.name.strip()
-    streaming = name.endswith(" Streaming Optimized")
+    streaming = name.endswith(STREAMING_NAME_SUFFIX)
     if streaming:
-        name = name[:-len(" Streaming Optimized")].strip()
+        name = name[:-len(STREAMING_NAME_SUFFIX)].strip()
 
     prefix_match = re.match(r"^([A-Z]{2})\s+(.+)$", name)
     if name in PREFIX_CODES:
@@ -144,6 +149,40 @@ def region_display_name(region: Region, language_code: str) -> str:
     if region.geo:
         suffix = "virtueller Standort" if language_code == "de" else "virtual location"
         name += f" ({suffix})"
+    if region.ping_ms is None:
+        return f"{name} · {tr('common.not_reachable')}"
+    return f"{name} · {region.ping_ms:.0f} ms"
+
+
+def region_is_streaming(region: Region) -> bool:
+    return region.name.strip().endswith(STREAMING_NAME_SUFFIX)
+
+
+def compact_region_display_name(region: Region, language_code: str) -> str:
+    """Compact server-list label with neutral virtual/streaming markers.
+
+    Server selectors and tray quick-pick surfaces stay compact, while logs,
+    confirmations, and other explanatory text keep the verbose wording.
+    """
+
+    name = localized_region_name(region, language_code)
+    streaming = region_is_streaming(region)
+    if streaming:
+        stream_text = (
+            "Streaming-optimiert" if language_code == "de" else "Streaming optimized"
+        )
+        verbose_suffix = f" – {stream_text}"
+        if name.endswith(verbose_suffix):
+            name = name[:-len(verbose_suffix)]
+
+    markers: list[str] = []
+    if region.geo:
+        markers.append(REGION_VIRTUAL_MARKER)
+    if streaming:
+        markers.append(REGION_STREAMING_MARKER)
+    if markers:
+        name = f"{name} {' '.join(markers)}"
+
     if region.ping_ms is None:
         return f"{name} · {tr('common.not_reachable')}"
     return f"{name} · {region.ping_ms:.0f} ms"
