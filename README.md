@@ -8,6 +8,8 @@ and does not require PIA's `manual-connections` repository.
 > This project is unofficial, not affiliated with Private Internet Access,
 > and not endorsed by the Bazzite project. Use it at your own risk.
 
+<img src="docs/screen.jpg" alt="PIA Bazzite Screenshot" width="668">
+
 ## Highlights
 
 - Connect, disconnect, and switch PIA locations.
